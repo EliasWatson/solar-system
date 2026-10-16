@@ -7,6 +7,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { buildBodyList, TYPE_LABEL } from './bodies.js';
 import { jdFromMs, helioPos, orbitPoints, periodDays, moonGeo, toThree, poleEcliptic, gmst, AU_KM, OBLIQ, elementsAt } from './orbits.js';
+import { Satellites, SAT_GROUPS } from './satellites.js';
 import './style.css';
 
 const AU = 50;                 // scene units per AU
@@ -72,6 +73,7 @@ const state = {
   simMs: Date.now(), rate: 1, playing: true,
 };
 const bodies = buildBodyList();
+const earthSunView = { value: new THREE.Vector3() };
 const byName = Object.fromEntries(bodies.map(b => [b.name, b]));
 const sphereGeo = new THREE.SphereGeometry(1, 96, 64);
 const lowGeo = new THREE.SphereGeometry(1, 32, 24);
@@ -90,6 +92,7 @@ function glowTexture() {
 }
 
 function displayRadius(b) {
+  if (b.type === 'satellite') return state.scale === 'true' ? 40 * KM : 0.004;
   if (state.scale === 'true') return b.r * KM;
   if (b.type === 'star') return 4.0;
   return Math.max(0.05, 0.16 * Math.sqrt(b.r / 1000));
@@ -111,6 +114,16 @@ for (const b of bodies) {
     mat = new THREE.MeshBasicMaterial({ map: tex(b.tex), color: new THREE.Color(1.6, 1.35, 1.0) });
   } else {
     mat = new THREE.MeshStandardMaterial({ map: tex(b.tex), roughness: 1, metalness: 0, color: b.tint ?? 0xffffff });
+  }
+  if (b.name === 'Earth') {
+    const night = tex('2k_earth_nightmap.jpg');
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.nightMap = { value: night };
+      sh.uniforms.uSunView = earthSunView;
+      sh.fragmentShader = 'uniform sampler2D nightMap;\nuniform vec3 uSunView;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        float sunDot = dot(normal, normalize(uSunView + vViewPosition));
+        totalEmissiveRadiance += texture2D(nightMap, vMapUv).rgb * smoothstep(0.1, -0.2, sunDot) * 1.4;`);
+    };
   }
   b.mesh = new THREE.Mesh(b.type === 'planet' || b.type === 'star' || b.name === 'Moon' ? sphereGeo : lowGeo, mat);
   b.mesh.userData.body = b;
@@ -209,6 +222,14 @@ function applyScale() {
   buildMoonOrbits(jdFromMs(state.simMs));
 }
 
+// ---------- satellites ----------
+const sats = new Satellites({
+  scene, earth: byName.Earth, kmToUnits: KM, displayRadiusEarth: () => displayRadius(byName.Earth), getScaleMode: () => state.scale,
+  onChange: () => { renderList(search.value); renderSatGroups(); maybeSelectFromHash(); },
+});
+sats.onSelect = s => selectSat(s);
+function selectSat(s) { sats.ensureObject(s); sats.update(state.simMs, camera, 0, s); select(s, true); }
+
 // ---------- update positions ----------
 const tmp = [0, 0, 0], tv = new THREE.Vector3(), tv2 = new THREE.Vector3();
 function updatePositions(jd) {
@@ -249,15 +270,20 @@ function select(b, fly = true) {
     const dist = Math.max(r * 5 * Math.max(1, 1.3 / camera.aspect), 1e-5);
     const dir = camera.position.clone().sub(controls.target).normalize();
     // nice viewing angle: slightly above, sun-lit side partially visible
-    if (b.type !== 'star') {
+    if (b.type === 'satellite') {
+      const R = displayRadius(byName.Earth);
+      const out = b.group.position.clone().sub(byName.Earth.group.position).normalize();
+      dir.copy(out).add(new THREE.Vector3(0, 0.35, 0)).normalize();
+      flight = { t: 0, dur: 1.8, fromTarget: controls.target.clone(), fromCam: camera.position.clone(), dir, dist: state.scale === 'true' ? 1500 * KM : R * 0.9 };
+    } else if (b.type !== 'star') {
       const toSun = b.group.position.clone().negate().normalize();
       dir.lerp(toSun, 0.35).add(new THREE.Vector3(0, 0.25, 0)).normalize();
     }
-    flight = { t: 0, dur: 1.8, fromTarget: controls.target.clone(), fromCam: camera.position.clone(), dir, dist };
+    if (!flight || flight.t > 0 || b.type !== 'satellite') flight = { t: 0, dur: 1.8, fromTarget: controls.target.clone(), fromCam: camera.position.clone(), dir, dist };
   }
   controls.minDistance = displayRadius(b) * 1.15;
   updateInfo();
-  history.replaceState(null, '', '#' + encodeURIComponent(b.name));
+  history.replaceState(null, '', '#' + (b.type === 'satellite' ? 'sat-' + b.id : encodeURIComponent(b.name)));
 }
 const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -291,6 +317,8 @@ renderer.domElement.addEventListener('pointerdown', e => { downXY = [e.clientX, 
 renderer.domElement.addEventListener('pointerup', e => {
   if (!downXY || Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]) > 6) return;
   const m = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  const sp = sats.pick(m, camera, 9, innerWidth, innerHeight);
+  if (sp) { selectSat(sp); return; }
   ray.setFromCamera(m, camera);
   const hits = ray.intersectObjects(pickables.filter(p => p.visible && p.parent.parent.parent.visible), false);
   if (hits.length) select(hits[0].object.userData.body, true);
@@ -314,6 +342,7 @@ function worldKm(b) {
   // physical position in km (heliocentric ecliptic → three frame)
   if (b.kind) return new THREE.Vector3(b.group.position.x, b.group.position.y, b.group.position.z).multiplyScalar(AU_KM / AU);
   if (b.type === 'moon') return worldKm(byName[b.parent]).add(b.localKm);
+  if (b.type === 'satellite') return worldKm(byName.Earth).add(b.km);
   return new THREE.Vector3();
 }
 function updateInfo() {
@@ -323,6 +352,24 @@ function updateInfo() {
   const jd = jdFromMs(state.simMs);
   const p = worldKm(b), e = worldKm(byName.Earth);
   const rows = [];
+  if (b.type === 'satellite') {
+    const alt = b.km.length() - 6371;
+    const grp = SAT_GROUPS.find(g => g[0] === b.groupKey);
+    rows.push(['Type', 'Earth satellite' + (grp ? ` · ${grp[1]}` : '')]);
+    rows.push(['NORAD ID', b.id]);
+    rows.push(['Altitude', b.ok ? `${Math.round(alt).toLocaleString()} km` : 'n/a (decayed?)']);
+    rows.push(['Speed', b.ok ? `${b.vel.toFixed(2)} km/s` : 'n/a']);
+    rows.push(['Period', b.periodMin < 120 ? `${b.periodMin.toFixed(1)} min` : `${(b.periodMin / 60).toFixed(2)} h`]);
+    rows.push(['Perigee / apogee', `${Math.round(b.peri).toLocaleString()} / ${Math.round(b.apo).toLocaleString()} km`]);
+    rows.push(['Inclination', `${b.inc.toFixed(2)}°`]);
+    rows.push(['Eccentricity', b.ecc.toFixed(5)]);
+    const age = (state.simMs - b.epoch) / 86400000;
+    rows.push(['Elements epoch', `${Math.abs(age).toFixed(1)} d ${age >= 0 ? 'old' : 'ahead'}`]);
+    info.querySelector('.name').textContent = b.name;
+    info.querySelector('.sub').textContent = `${b.objName} · ${b.cospar}`;
+    info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+    return;
+  }
   rows.push(['Type', b.type === 'moon' ? `Moon of ${b.parent}` : TYPE_LABEL[b.type]]);
   rows.push(['Radius', `${b.r < 10 ? b.r.toFixed(2) : Math.round(b.r).toLocaleString()} km`]);
   if (b.type !== 'star') rows.push(['From Sun', fmtKm(p.length())]);
@@ -368,8 +415,38 @@ function renderList(q = '') {
       listEl.appendChild(it);
     }
   }
+  const satItems = q ? sats.search(q) : sats.featured;
+  if (satItems.length) {
+    const h = document.createElement('div'); h.className = 'group'; h.textContent = 'Satellites'; listEl.appendChild(h);
+    for (const s of satItems) {
+      const it = document.createElement('button'); it.className = 'item';
+      it.innerHTML = `<span class="dot" style="background:#ffe08a"></span>${s.name}<small>${s.featured ? 'Earth orbit' : s.id}</small>`;
+      it.onclick = () => { selectSat(s); if (innerWidth < 700) $('#sidebar').classList.remove('open'); };
+      listEl.appendChild(it);
+    }
+  }
+}
+const satGroupsEl = document.getElementById('sat-groups');
+function renderSatGroups() {
+  satGroupsEl.innerHTML = '';
+  for (const [key, title, color] of SAT_GROUPS) {
+    const g = sats.groups[key];
+    const lab = document.createElement('label');
+    const status = !g ? '' : g.loading ? ' <small>loading…</small>' : g.error ? ' <small class="err">failed</small>' : ` <small>${g.sats.length.toLocaleString()}</small>`;
+    lab.innerHTML = `<input type="checkbox" ${g && g.enabled ? 'checked' : ''}/> <span class="dot" style="background:#${new THREE.Color(color).getHexString()}"></span>${title}${status}`;
+    lab.querySelector('input').onchange = e => sats.setGroup(key, e.target.checked);
+    satGroupsEl.appendChild(lab);
+  }
+}
+let hashDone = false;
+function maybeSelectFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (hashDone || !h.startsWith('sat-')) return;
+  const s = sats.byId.get(+h.slice(4));
+  if (s) { hashDone = true; selectSat(s); }
 }
 renderList();
+renderSatGroups();
 if (innerWidth < 700) $('#sidebar').classList.remove('open');
 const search = $('#search');
 search.addEventListener('input', () => renderList(search.value));
@@ -387,9 +464,12 @@ $('#menu').onclick = () => $('#sidebar').classList.toggle('open');
 
 // toggles
 function bindToggle(id, key, fn) { const el = $(id); el.checked = state[key]; el.onchange = () => { state[key] = el.checked; fn && fn(); applyVisibility(); }; }
-bindToggle('#t-orbits', 'showOrbits'); bindToggle('#t-labels', 'showLabels'); bindToggle('#t-small', 'showSmall'); bindToggle('#t-moons', 'showMoons');
+bindToggle('#t-orbits', 'showOrbits');
+state.showSats = true; state.showTrail = true;
+bindToggle('#t-sats', 'showSats', () => { sats.visible = state.showSats; });
+bindToggle('#t-trail', 'showTrail', () => { sats.showTrail = state.showTrail; }); bindToggle('#t-labels', 'showLabels'); bindToggle('#t-small', 'showSmall'); bindToggle('#t-moons', 'showMoons');
 const scaleSel = $('#t-scale');
-scaleSel.onchange = () => { state.scale = scaleSel.value; applyScale(); updatePositions(jdFromMs(state.simMs)); if (selected) select(selected, true); };
+scaleSel.onchange = () => { state.scale = scaleSel.value; applyScale(); updatePositions(jdFromMs(state.simMs)); sats.markAllFresh(); if (selected) select(selected, true); };
 function applyVisibility() {
   for (const b of bodies) {
     const isSmall = b.type === 'asteroid' || b.type === 'kbo';
@@ -431,9 +511,10 @@ addEventListener('resize', () => {
 function updateLabels() {
   const camDist = camera.position.distanceTo(controls.target);
   let occluder = null;
-  if (selected) {
-    const dist = selected.group.position.distanceTo(camera.position), r = displayRadius(selected);
-    const c = tv2.copy(selected.group.position).project(camera);
+  const occ = selected && selected.type === 'satellite' ? byName.Earth : selected;
+  if (occ) {
+    const dist = occ.group.position.distanceTo(camera.position), r = displayRadius(occ);
+    const c = tv2.copy(occ.group.position).project(camera);
     // angular radius in NDC (x units)
     const sr = (r / Math.sqrt(Math.max(dist * dist - r * r, 1e-30))) / Math.tan(camera.fov * Math.PI / 360);
     occluder = { dist, sx: c.x, sy: c.y, sr };
@@ -449,7 +530,7 @@ function updateLabels() {
     if (show && (b.type === 'asteroid' || b.type === 'kbo') && selected !== b) {
       show = camera.position.distanceTo(b.group.position) < Math.max(camDist * 3, 400);
     }
-    if (show && occluder && b !== selected && b.group.position.distanceTo(camera.position) > occluder.dist) {
+    if (show && occluder && b !== selected && b !== occ && b.group.position.distanceTo(camera.position) > occluder.dist) {
       tv.copy(b.group.position).project(camera);
       if (tv.z < 1 && Math.hypot((tv.x - occluder.sx) * camera.aspect, tv.y - occluder.sy) < occluder.sr) show = false;
     }
@@ -471,12 +552,14 @@ function frame() {
   const jd = jdFromMs(state.simMs);
   updatePositions(jd);
   if (Math.abs(state.simMs - lastOrbitRebuild) > 86400000 * 30) { buildHelioOrbits(jd); buildMoonOrbits(jd); applyVisibility(); lastOrbitRebuild = state.simMs; }
+  sats.update(state.simMs, camera, dt, selected);
   updateCamera(dt);
   controls.update();
   updateLabels();
   if ((infoTick += dt) > 0.25) { infoTick = 0; if (selected) updateInfo(); }
   const ds = fmtLocal(state.simMs);
   if (ds !== lastDateStr && document.activeElement !== dateEl) { dateEl.value = ds; lastDateStr = ds; }
+  earthSunView.value.set(0, 0, 0).applyMatrix4(camera.matrixWorldInverse);
   composer.render();
   labelRenderer.render(scene, camera);
   requestAnimationFrame(frame);
