@@ -9,6 +9,7 @@ import { buildBodyList, TYPE_LABEL } from './bodies.js';
 import { jdFromMs, helioPos, orbitPoints, periodDays, moonGeo, toThree, poleEcliptic, gmst, AU_KM, OBLIQ, elementsAt } from './orbits.js';
 import { Satellites, SAT_GROUPS } from './satellites.js';
 import { Galaxy, LY_PC } from './galaxy.js';
+import { classifyStar, makeStarMaterial, starTime, tickFlares } from './starshader.js';
 import './style.css';
 
 const AU = 50;                 // scene units per AU
@@ -113,7 +114,9 @@ for (const b of bodies) {
 
   let mat;
   if (b.type === 'star') {
-    mat = new THREE.MeshBasicMaterial({ map: tex(b.tex), color: new THREE.Color(1.6, 1.35, 1.0) });
+    b.st = { host: 'Sun', teff: 5772, rad: 1, mass: 1, lum: 0, spec: 'G2V', logg: 4.44 };
+    b.cls = classifyStar(b.st);
+    mat = makeStarMaterial(b.st, b.cls, 0.37);
   } else {
     mat = new THREE.MeshStandardMaterial({ map: tex(b.tex), roughness: 1, metalness: 0, color: b.tint ?? 0xffffff });
   }
@@ -394,6 +397,8 @@ function updateInfo() {
     return;
   }
   rows.push(['Type', b.type === 'moon' ? `Moon of ${b.parent}` : TYPE_LABEL[b.type]]);
+  if (b.cls) rows.push(['Class', b.cls.label]);
+  if (b.type === 'star') rows.push(['Temperature', '5,772 K']);
   rows.push(['Radius', `${b.r < 10 ? b.r.toFixed(2) : Math.round(b.r).toLocaleString()} km`]);
   if (b.type !== 'star') rows.push(['From Sun', fmtKm(p.length())]);
   if (b.name !== 'Earth') {
@@ -423,20 +428,26 @@ function exoInfo(b, rows) {
   const lyS = ly < 100 ? ly.toFixed(2) : Math.round(ly).toLocaleString();
   const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d);
   let sub = '';
+  if (b.type === 'exostar' && b.cls.kind === 'wd') sub = 'Dense stellar remnant about the size of Earth (~0.5 M☉ packed into Earth-size); glows from stored heat and slowly cools.';
   if (b.type === 'exostar') {
     const st = b.st;
-    rows.push(['Type', 'Star' + (st.spec ? ` · ${st.spec}` : '')]);
+    rows.push(['Type', b.cls.label]);
+    if (b.oblate) rows.push(['Oblateness', `${(b.oblate * 100).toFixed(1)}% (from v sin i ${st.vsini} km/s)`]);
     rows.push(['Distance', `${lyS} light-years`]);
-    rows.push(['Temperature', st.teff ? `${Math.round(st.teff).toLocaleString()} K` : '—']);
-    rows.push(['Radius', st.rad ? `${fmt(st.rad, 3)} R☉` : '—']);
+    const psr = b.cls.kind === 'pulsar';
+    rows.push(['Temperature', st.teff ? `${Math.round(st.teff).toLocaleString()} K` : psr ? '~10⁵–10⁶ K (surface, est.)' : '—']);
+    rows.push(['Radius', st.rad ? `${fmt(st.rad, 3)} R☉${st.rad < 0.05 ? ` (${Math.round(st.rad * 695700).toLocaleString()} km)` : ''}` : psr ? '~10 km' : '—']);
     rows.push(['Mass', st.mass ? `${fmt(st.mass, 3)} M☉` : '—']);
-    rows.push(['Luminosity', `${(st.lum != null ? Math.pow(10, st.lum) : s.L).toPrecision(3)} L☉`]);
-    if (!b.isCompanion) {
+    if (!psr) rows.push(['Luminosity', `${(st.lum != null ? Math.pow(10, st.lum) : s.L).toPrecision(3)} L☉`]);
+    if (psr) rows.push(['Spin period', '6.22 ms (beams slowed for display)'], ['Known planets', String(s.planets.length)]);
+    if (!b.isCompanion && !b.isFar && !psr) {
       rows.push(['Known planets', String(s.planets.length)]);
       rows.push(['Habitable zone', `${fmt(s.hz[0], 3)} – ${fmt(s.hz[1], 3)} AU`]);
     }
+    if (b.cls.kind === 'pulsar') sub = 'Rapidly spinning neutron star (~10 km across, ~1.4 M☉). Real spin period 6.2 ms; beams shown slowed down. Its planets were the first exoplanets found (1992).';
+    if (b.isFar) rows.push(['Note', b.note]);
     if (b.isCompanion) rows.push(['Orbit around A', `${b.orbit.a} AU · ${(b.orbit.per / 365.25).toFixed(1)} yr · e ${b.orbit.e}`]);
-    sub = s.note || (s.nstars > 1 ? `${s.nstars}-star system (companions not shown)` : '');
+    if (!sub) sub = b.isFar ? '' : s.note || (s.nstars > 1 ? `${s.nstars}-star system (companions not shown)` : '');
   } else {
     rows.push(['Type', `Exoplanet · ${b.kind}`]);
     rows.push(['Host star', s.name]);
@@ -653,6 +664,8 @@ function frame() {
   const ds = fmtLocal(state.simMs);
   if (ds !== lastDateStr && document.activeElement !== dateEl) { dateEl.value = ds; lastDateStr = ds; }
   earthSunView.value.set(0, 0, 0).applyMatrix4(camera.matrixWorldInverse);
+  starTime.value += dt;
+  tickFlares(byName.Sun.mesh.material, dt);
   composer.render();
   labelRenderer.render(scene, camera);
   requestAnimationFrame(frame);

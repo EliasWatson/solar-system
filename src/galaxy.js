@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import exo from './data/exoplanets.json';
 import { OBLIQ, keplerPos } from './orbits.js';
+import { classifyStar, makeStarMaterial, makePulsarBeams, tickFlares } from './starshader.js';
 import { completePlanet, classify, makePlanetTexture, tempToColor, bvToTemp, seedFrom } from './planetgen.js';
 
 const PC_AU = 206264.806;
@@ -89,7 +90,8 @@ export class Galaxy {
     const list = [{ id: 'sol', name: 'Solar System', host: 'Sun', pc: new THREE.Vector3(), dist_pc: 0, teff: 5772, rad: 1, mass: 1, curated: true, sol: true, planets: [] }];
     list.push({ id: 'alpha-cen', name: 'Alpha Centauri', host: 'Alpha Centauri A', pc: eqToThree(-0.4952, -0.414, -1.1567), dist_pc: 1.3384, teff: 5790, rad: 1.2234, mass: 1.0788, lum: Math.log10(1.519), spec: 'G2V', curated: true, planets: [],
       companion: { name: 'Alpha Centauri B', teff: 5260, rad: 0.8632, mass: 0.9092, lum: Math.log10(0.5002), spec: 'K1V', a: 23.52, e: 0.5208, per: 79.91 * 365.25, i: 79.2 },
-      note: 'Binary: A and B orbit each other every 79.9 years. Proxima Centauri (a separate system here) orbits the pair at ~13,000 AU. No confirmed planets yet (a JWST candidate around A was reported in 2025).' });
+      farCompanions: [{ id: 'proxima-cen', name: 'Proxima Centauri', note: 'Red dwarf ~13,000 AU from A/B (orbital period ~550,000 years). Its planets are shown in its own system.' }],
+      note: 'Binary: A and B orbit their common barycentre every 79.9 years. Proxima Centauri (a separate system here) orbits the pair at ~13,000 AU. No confirmed planets yet (a JWST candidate around A was reported in 2025).' });
     for (const s of exo.systems) {
       const id = s.host.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       list.push({ ...s, id, name: s.host, pc: radecToThree(s.ra, s.dec, s.dist_pc) });
@@ -190,31 +192,59 @@ export class Galaxy {
     const mkBody = (o) => { o.group = new THREE.Group(); o.tilt = new THREE.Group(); o.spin = new THREE.Group(); o.group.add(o.tilt); o.tilt.add(o.spin); root.add(o.group); return o; };
 
     const planets = s.planets.map(p => completePlanet(p, s)).filter(p => p.a);
+    if (/^PSR/.test(s.host || '')) planets.forEach(p => { p.tirr = 40; p.teq = null; });
     const L = s.lum != null ? Math.pow(10, s.lum) : Math.pow(s.rad || 1, 2) * Math.pow((s.teff || 5772) / 5772, 4);
     const hz = [Math.sqrt(L / 1.107), Math.sqrt(L / 0.356)]; // Kopparapu+2013 conservative (runaway → maximum greenhouse), approx
     s.hz = hz; s.L = L;
     const innermost = Math.min(...planets.map(p => p.a * (1 - p.e)), s.companion ? s.companion.a * (1 - s.companion.e) * 0.5 : Infinity, 50);
 
     const addStar = (st, isPrimary) => {
-      const col = tempToColor(st.teff);
-      const b = mkBody({ name: st.host || st.name, type: 'exostar', sys: s, st, color: col });
-      const rkm = (st.rad || 1) * 695700;
+      const cls = classifyStar(st); st.cls = cls;
+      const col = tempToColor(cls.kind === 'pulsar' ? 30000 : st.teff);
+      const b = mkBody({ name: st.host || st.name, type: 'exostar', sys: s, st, cls, color: col });
+      const radSun = cls.kind === 'pulsar' ? 1.44e-5 : (st.rad || 1);   // ~10 km neutron star
+      const rkm = radSun * 695700;
       b.trueR = rkm / 149597870.7 * AU;
-      b.dispR = Math.max(b.trueR, Math.min(4 * Math.sqrt(st.rad || 1), innermost * AU * 0.35));
-      const mat = new THREE.MeshBasicMaterial({ map: this.tex('2k_sun.jpg'), color: col.clone().multiplyScalar(1.7) });
-      b.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), mat); b.mesh.userData.body = b; b.spin.add(b.mesh);
+      b.dispR = Math.max(b.trueR, Math.min(4 * Math.sqrt(radSun), innermost * AU * 0.35));
+      if (cls.kind === 'wd' || cls.kind === 'pulsar') b.dispR = Math.max(b.trueR, Math.min(0.25, innermost * AU * 0.2));
+      const mat = makeStarMaterial(st, cls, seedFrom(b.name));
+      b.starMat = mat; b.glowMul = mat.userData.params.glow * (cls.kind === 'wd' ? 1.6 : cls.kind === 'pulsar' ? 2.2 : 1) * (cls.kind.includes('giant') ? 0.6 : 0.8);
+      b.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), mat); b.mesh.userData.body = b; b.spin.add(b.mesh);
+      // rotational oblateness from v sin i (lower bound on equatorial speed)
+      if (st.vsini && st.rad && st.mass) {
+        const f = (st.vsini ** 2 * st.rad * 695700) / (2 * 1.32712e11 * st.mass);
+        if (f > 0.005) { b.oblate = Math.min(f, 0.3); b.mesh.scale.y = 1 - b.oblate; }
+      }
+      if (cls.kind === 'pulsar') { b.beams = makePulsarBeams(); b.tilt.add(b.beams); }
       b.glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex(), color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
       b.group.add(b.glow);
       mkLabel(b, 't-star', col);
       bodies.push(b); return b;
     };
     const primary = addStar(s, true);
-    if (s.companion) { const c = addStar({ ...s.companion, host: s.companion.name }, false); c.orbit = s.companion; c.isCompanion = true; }
+    if (s.companion) {
+      const c = addStar({ ...s.companion, host: s.companion.name }, false); c.orbit = s.companion; c.isCompanion = true; c.primary = primary;
+      const mA = s.mass || 1, mB = s.companion.mass || 1, o = s.companion;
+      for (const [f, col] of [[mA / (mA + mB), 0xffe0a0], [-mB / (mA + mB), 0xfff0d0]]) {
+        const pts = [];
+        for (let k = 0; k <= 360; k++) { const E = k / 360 * 2 * Math.PI; const M = (E - o.e * Math.sin(E)) * 180 / Math.PI; const q = keplerPos(o.a, o.e, 12, 40, 232, M); pts.push(new THREE.Vector3(q[0] * AU * f, q[2] * AU * f, -q[1] * AU * f)); }
+        root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.35, depthWrite: false })));
+      }
+      this.hzFollow = primary;
+    } else this.hzFollow = null;
+    for (const far of s.farCompanions || []) {
+      const fs = this.byId[far.id]; if (!fs) continue;
+      const c = addStar({ ...fs, host: far.name }, false);
+      c.isFar = true; c.farSys = fs;
+      c.group.position.copy(fs.pc).sub(s.pc).multiplyScalar(this.PC);
+      c.note = far.note;
+    }
 
     // habitable zone
     const hzMesh = new THREE.Mesh(new THREE.RingGeometry(hz[0] * AU, hz[1] * AU, 160, 1),
       new THREE.MeshBasicMaterial({ color: 0x3cff8a, transparent: true, opacity: 0.09, side: THREE.DoubleSide, depthWrite: false }));
     hzMesh.rotation.x = -Math.PI / 2; root.add(hzMesh); this.hzMesh = hzMesh;
+    if (/^PSR/.test(s.host || '')) hzMesh.visible = false, this.hzMesh = null;
 
     const sorted = planets.slice().sort((a, b) => a.a - b.a);
     sorted.forEach((p, idx) => {
@@ -261,7 +291,8 @@ export class Galaxy {
     for (const b of bodies) {
       const r = t ? b.trueR : b.dispR;
       b.spin.scale.setScalar(r);
-      if (b.glow) b.glow.scale.setScalar(r * (t ? 12 : 6));
+      if (b.glow) b.glow.scale.setScalar(r * (t ? 12 : 6) * (b.glowMul || 1));
+      if (b.beams) b.beams.scale.setScalar(r * 8);
     }
   }
   displayRadius(b) { return this.getScaleMode() === 'true' ? b.trueR : b.dispR; }
@@ -276,11 +307,15 @@ export class Galaxy {
         b.spin.rotation.y = (jd % 1) * 2 * Math.PI * 0.3;
       } else if (b.isCompanion) {
         const o = b.orbit, M = (360 / o.per) * (jd - 2451545.0) + 120;
-        // relative orbit of B around A (A at origin; a simplification of the barycentric motion)
+        // both stars orbit the barycentre (scene origin), each scaled by the other's mass fraction
         keplerPos(o.a, o.e, 12, 40, 232, M, q);
-        b.group.position.set(q[0] * AU, q[2] * AU, -q[1] * AU);
+        const mA = b.primary.st.mass || 1, mB = b.st.mass || 1, fA = mB / (mA + mB), fB = mA / (mA + mB);
+        b.group.position.set(q[0] * AU * fB, q[2] * AU * fB, -q[1] * AU * fB);
+        b.primary.group.position.set(-q[0] * AU * fA, -q[2] * AU * fA, q[1] * AU * fA);
       }
-      if (b.type === 'exostar') b.spin.rotation.y = (jd / 25) * 2 * Math.PI;
+      if (b.starMat) tickFlares(b.starMat, this.dtReal || 0.016);
+      if (b.beams) b.beams.rotation.y += (this.dtReal || 0.016) * 2 * Math.PI / 1.6;
+      if (b.type === 'exostar') b.spin.rotation.y = (jd / (b.st.rotp || 25)) * 2 * Math.PI;
     }
   }
 
@@ -299,7 +334,8 @@ export class Galaxy {
       const { root, bodies } = this.buildExo(s);
       this.exoRoot = root; this.exoBodies = bodies; this.scene.add(root);
       this.sunLight.color.copy(tempToColor(s.teff));
-      this.sunLight.intensity = 3.2;
+      const L = s.lum != null ? Math.pow(10, s.lum) : 1;
+      this.sunLight.intensity = 3.2 * Math.min(1.6, Math.max(0.6, Math.pow(L, 0.12)));
     } else { this.sunLight.color.set(0xffffff); this.sunLight.intensity = 3.2; }
     this.onSystemChange(s);
   }
@@ -340,6 +376,7 @@ export class Galaxy {
   }
 
   update(jd, dt) {
+    this.dtReal = dt;
     if (this.exoRoot) this.updateExo(jd);
     const camD = this.camera.position.length(); // distance from current system's star
     this.galactic = smooth(3e4, 6e5, camD);
@@ -347,6 +384,7 @@ export class Galaxy {
     if (this.hzMesh) {
       this.hzMesh.visible = this.galactic < 0.9;
       const hzOut = this.current.hz ? this.current.hz[1] * this.AU : 1;
+      if (this.hzFollow) this.hzMesh.position.copy(this.hzFollow.group.position);
       this.hzMesh.material.opacity = 0.11 * smooth(1.2, 3.5, camD / hzOut);
     }
     const camPc = this.camera.position.clone().add(this.origin).divideScalar(this.PC);
