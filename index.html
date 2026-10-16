@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Solar System — live 3D</title>
+<meta name="description" content="Explore the Sun, planets, dwarf planets, moons and asteroids in 3D, positioned where they are right now." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='30' fill='%23ffb640'/></svg>" />
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="loading"><div class="spinner"></div>Loading the solar system…</div>
+
+<button id="menu" aria-label="Bodies">☰</button>
+<aside id="sidebar" class="open">
+  <h1>Solar System</h1>
+  <input id="search" type="search" placeholder="Search bodies…  ( / )" autocomplete="off" />
+  <div id="list"></div>
+  <div class="opts">
+    <label>Scale
+      <select id="t-scale"><option value="enlarged">Enlarged bodies</option><option value="true">True scale</option></select>
+    </label>
+    <label><input type="checkbox" id="t-orbits" /> Orbits</label>
+    <label><input type="checkbox" id="t-labels" /> Labels</label>
+    <label><input type="checkbox" id="t-moons" /> Moons</label>
+    <label><input type="checkbox" id="t-small" /> Asteroids</label>
+  </div>
+  <div class="credits">Textures: <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a> (CC BY 4.0). Orbits: JPL approximate planetary elements &amp; JPL SBDB.</div>
+</aside>
+
+<section id="info" class="hidden">
+  <button class="close" aria-label="Close">×</button>
+  <div class="name"></div><div class="sub"></div>
+  <div class="rows"></div>
+  <button class="refocus">Focus</button>
+</section>
+
+<footer id="time">
+  <button id="play" title="Play/pause (space)">❚❚</button>
+  <input id="rate" type="range" min="0" step="1" />
+  <span id="rate-label"></span>
+  <input id="date" type="datetime-local" />
+  <button id="now">Now</button>
+</footer>
+<div id="hint">Drag to rotate · scroll/pinch to zoom · right-drag/two-finger to pan · click a body to fly to it</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
