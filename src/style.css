@@ -64,3 +64,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 #sat-groups small { margin-left: auto; color: var(--mut); }
 #sat-groups small.err { color: #ff8080; }
 .label.t-satellite { font-size: 11px; color: #ffe8a8; }
+
+#nav { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; z-index: 4; background: var(--bg); border: 1px solid var(--bd); border-radius: 12px; padding: 6px 8px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+#nav button { background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid var(--bd); border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+#nav #btn-home { background: rgba(255,197,107,.15); color: var(--acc); }
+#sys-name { font-size: 13px; color: var(--mut); padding: 0 4px; white-space: nowrap; }
+.label.t-system { font-size: 11px; color: #9fdcec; }
+.label.t-system.curated { font-size: 12px; color: #c6f3ff; font-weight: 600; }
+.label.t-system small { margin-left: 4px; font-size: 9.5px; color: #7fb; background: rgba(60,255,140,.12); border-radius: 6px; padding: 0 4px; }
+.label.t-bright { font-size: 10.5px; color: #8a93a6; pointer-events: none; font-style: italic; }
+.label.t-star { font-weight: 600; font-size: 13px; }
+@media (max-width: 700px) {
+  #nav { top: 12px; left: 60px; right: 12px; transform: none; justify-content: flex-end; }
+  #sys-name { display: none; }
+  #sidebar { top: 60px; }
+}

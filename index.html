@@ -12,6 +12,7 @@
 <div id="loading"><div class="spinner"></div>Loading the solar system…</div>
 
 <button id="menu" aria-label="Bodies">☰</button>
+<nav id="nav"><span id="sys-name">Solar System</span><button id="btn-galaxy" title="Zoom out to nearby stars">✦ Nearby stars</button><button id="btn-home" style="display:none">☉ Back to Solar System</button></nav>
 <aside id="sidebar" class="open">
   <h1>Solar System</h1>
   <input id="search" type="search" placeholder="Search bodies…  ( / )" autocomplete="off" />
@@ -28,7 +29,7 @@
     <label><input type="checkbox" id="t-trail" /> Sat trail</label>
   </div>
   <details class="satpanel"><summary>Satellite groups</summary><div id="sat-groups"></div><div class="credits">Live orbital elements: CelesTrak GP, propagated with SGP4 (satellite.js).</div></details>
-  <div class="credits">Textures: <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a> (CC BY 4.0). Orbits: JPL approximate planetary elements &amp; JPL SBDB.</div>
+  <div class="credits">Textures: <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a> (CC BY 4.0). Orbits: JPL approximate planetary elements &amp; JPL SBDB. Exoplanets: <a href="https://exoplanetarchive.ipac.caltech.edu/" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a> (CC BY-SA 4.0).</div>
 </aside>
 
 <section id="info" class="hidden">
@@ -45,7 +46,7 @@
   <input id="date" type="datetime-local" />
   <button id="now">Now</button>
 </footer>
-<div id="hint">Drag to rotate · scroll/pinch to zoom · right-drag/two-finger to pan · click a body to fly to it</div>
+<div id="hint">Drag to rotate · scroll/pinch to zoom · right-drag/two-finger to pan · click a body to fly to it · ✦ to see nearby stars</div>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -6,7 +6,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "elements": "node scripts/fetch-elements.mjs"
+    "elements": "node scripts/fetch-elements.mjs",
+    "exoplanets": "node scripts/fetch-exoplanets.mjs",
+    "stars": "python3 scripts/fetch-hyg.py"
   },
   "keywords": [],
   "author": "",

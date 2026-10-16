@@ -8,6 +8,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { buildBodyList, TYPE_LABEL } from './bodies.js';
 import { jdFromMs, helioPos, orbitPoints, periodDays, moonGeo, toThree, poleEcliptic, gmst, AU_KM, OBLIQ, elementsAt } from './orbits.js';
 import { Satellites, SAT_GROUPS } from './satellites.js';
+import { Galaxy, LY_PC } from './galaxy.js';
 import './style.css';
 
 const AU = 50;                 // scene units per AU
@@ -23,7 +24,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1e-7, 2e6);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1e-7, 1e12);
 camera.position.set(0, 260, 420);
 
 const labelRenderer = new CSS2DRenderer();
@@ -37,7 +38,7 @@ controls.dampingFactor = 0.08;
 controls.zoomSpeed = 1.4;
 controls.rotateSpeed = 0.6;
 controls.minDistance = 0.00001;
-controls.maxDistance = 120000;
+controls.maxDistance = 4e10;
 controls.zoomToCursor = false;
 
 const loader = new THREE.TextureLoader();
@@ -92,6 +93,7 @@ function glowTexture() {
 }
 
 function displayRadius(b) {
+  if (b.trueR !== undefined) return galaxy.displayRadius(b);
   if (b.type === 'satellite') return state.scale === 'true' ? 40 * KM : 0.004;
   if (state.scale === 'true') return b.r * KM;
   if (b.type === 'star') return 4.0;
@@ -230,6 +232,23 @@ const sats = new Satellites({
 sats.onSelect = s => selectSat(s);
 function selectSat(s) { sats.ensureObject(s); sats.update(state.simMs, camera, 0, s); select(s, true); }
 
+// ---------- other star systems ----------
+const galaxy = new Galaxy({
+  scene, camera, controls, AU, tex, sunLight, getScaleMode: () => state.scale,
+  onSelectBody: b => select(b, true),
+  onSystemChange: () => {
+    selected = null; flight = null; info.classList.add('hidden');
+    document.querySelectorAll('.label.sel').forEach(e => e.classList.remove('sel'));
+    applyVisibility(); renderList(search.value); updateNavButtons();
+  },
+  onArrive: s => {
+    const star = s.sol ? byName.Sun : galaxy.exoBodies[0];
+    select(star, false);
+    history.replaceState(null, '', s.sol ? '#Sun' : '#sys-' + s.id);
+  },
+});
+function startSystemFlight(s, opts) { selected = null; flight = null; info.classList.add('hidden'); galaxy.flyToSystem(s, opts); }
+
 // ---------- update positions ----------
 const tmp = [0, 0, 0], tv = new THREE.Vector3(), tv2 = new THREE.Vector3();
 function updatePositions(jd) {
@@ -283,7 +302,7 @@ function select(b, fly = true) {
   }
   controls.minDistance = displayRadius(b) * 1.15;
   updateInfo();
-  history.replaceState(null, '', '#' + (b.type === 'satellite' ? 'sat-' + b.id : encodeURIComponent(b.name)));
+  history.replaceState(null, '', '#' + (b.type === 'satellite' ? 'sat-' + b.id : b.sys ? 'sys-' + b.sys.id + (b.type === 'exoplanet' ? '/' + encodeURIComponent(b.name) : '') : encodeURIComponent(b.name)));
 }
 const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -317,10 +336,13 @@ renderer.domElement.addEventListener('pointerdown', e => { downXY = [e.clientX, 
 renderer.domElement.addEventListener('pointerup', e => {
   if (!downXY || Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]) > 6) return;
   const m = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  const gs = galaxy.pick(m, innerWidth, innerHeight);
+  if (gs) { startSystemFlight(gs); return; }
   const sp = sats.pick(m, camera, 9, innerWidth, innerHeight);
   if (sp) { selectSat(sp); return; }
   ray.setFromCamera(m, camera);
-  const hits = ray.intersectObjects(pickables.filter(p => p.visible && p.parent.parent.parent.visible), false);
+  const exoMeshes = galaxy.exoBodies.map(b => b.mesh);
+  const hits = ray.intersectObjects(pickables.filter(p => p.visible && p.parent.parent.parent.visible).concat(exoMeshes), false);
   if (hits.length) select(hits[0].object.userData.body, true);
 });
 renderer.domElement.addEventListener('dblclick', () => { if (selected) select(selected, true); });
@@ -352,6 +374,7 @@ function updateInfo() {
   const jd = jdFromMs(state.simMs);
   const p = worldKm(b), e = worldKm(byName.Earth);
   const rows = [];
+  if (b.sys) { exoInfo(b, rows); return; }
   if (b.type === 'satellite') {
     const alt = b.km.length() - 6371;
     const grp = SAT_GROUPS.find(g => g[0] === b.groupKey);
@@ -395,6 +418,43 @@ function updateInfo() {
   info.querySelector('.sub').textContent = b.fullname || '';
   info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
 }
+function exoInfo(b, rows) {
+  const s = b.sys, ly = (s.dist_pc * LY_PC);
+  const lyS = ly < 100 ? ly.toFixed(2) : Math.round(ly).toLocaleString();
+  const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d);
+  let sub = '';
+  if (b.type === 'exostar') {
+    const st = b.st;
+    rows.push(['Type', 'Star' + (st.spec ? ` · ${st.spec}` : '')]);
+    rows.push(['Distance', `${lyS} light-years`]);
+    rows.push(['Temperature', st.teff ? `${Math.round(st.teff).toLocaleString()} K` : '—']);
+    rows.push(['Radius', st.rad ? `${fmt(st.rad, 3)} R☉` : '—']);
+    rows.push(['Mass', st.mass ? `${fmt(st.mass, 3)} M☉` : '—']);
+    rows.push(['Luminosity', `${(st.lum != null ? Math.pow(10, st.lum) : s.L).toPrecision(3)} L☉`]);
+    if (!b.isCompanion) {
+      rows.push(['Known planets', String(s.planets.length)]);
+      rows.push(['Habitable zone', `${fmt(s.hz[0], 3)} – ${fmt(s.hz[1], 3)} AU`]);
+    }
+    if (b.isCompanion) rows.push(['Orbit around A', `${b.orbit.a} AU · ${(b.orbit.per / 365.25).toFixed(1)} yr · e ${b.orbit.e}`]);
+    sub = s.note || (s.nstars > 1 ? `${s.nstars}-star system (companions not shown)` : '');
+  } else {
+    rows.push(['Type', `Exoplanet · ${b.kind}`]);
+    rows.push(['Host star', s.name]);
+    rows.push(['Distance', `${lyS} light-years`]);
+    rows.push(['Radius', `${fmt(b.r)} R⊕${b.estR ? ' (est.)' : ''}`]);
+    rows.push(['Mass', `${b.m >= 100 ? (b.m / 317.8).toFixed(2) + ' MJ' : fmt(b.m) + ' M⊕'}${b.estM ? ' (est.)' : ''}`]);
+    rows.push(['Orbit', `${fmt(b.a, 4)} AU`]);
+    rows.push(['Period', fmtPeriod(b.per)]);
+    rows.push(['Eccentricity', fmt(b.e, 3)]);
+    rows.push(['Equilibrium temp', b.teq ? `${Math.round(b.teq)} K (${Math.round(b.teq - 273)} °C)${b.eqt == null ? ' est.' : ''}` : '—']);
+    rows.push(['Habitable zone', b.inHZ ? 'Yes (conservative)' : 'No']);
+    if (b.year) rows.push(['Discovered', `${b.year} · ${b.method || ''}`]);
+    sub = "Appearance is an artist's estimate from radius, mass and temperature. Orbital phase and orientation are estimated.";
+  }
+  info.querySelector('.name').textContent = b.name;
+  info.querySelector('.sub').textContent = sub;
+  info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+}
 $('#info .close').onclick = () => { selected = null; flight = null; document.querySelectorAll('.label.sel').forEach(e => e.classList.remove('sel')); info.classList.add('hidden'); controls.minDistance = 1e-5; };
 $('#info .refocus').onclick = () => selected && select(selected, true);
 
@@ -405,6 +465,7 @@ function renderList(q = '') {
   q = q.trim().toLowerCase();
   listEl.innerHTML = '';
   for (const [title, f] of groups) {
+    if (!galaxy.current.sol) continue;
     const items = bodies.filter(f).filter(b => !q || b.name.toLowerCase().includes(q) || (b.parent || '').toLowerCase().includes(q));
     if (!items.length) continue;
     const h = document.createElement('div'); h.className = 'group'; h.textContent = title; listEl.appendChild(h);
@@ -415,7 +476,29 @@ function renderList(q = '') {
       listEl.appendChild(it);
     }
   }
-  const satItems = q ? sats.search(q) : sats.featured;
+  if (!galaxy.current.sol && galaxy.exoBodies.length) {
+    const h = document.createElement('div'); h.className = 'group'; h.textContent = 'This system: ' + galaxy.current.name; listEl.prepend(h);
+    let after = h;
+    for (const b of galaxy.exoBodies) {
+      if (q && !b.name.toLowerCase().includes(q)) continue;
+      const it = document.createElement('button'); it.className = 'item';
+      it.innerHTML = `<span class="dot" style="background:#${b.color.getHexString()}"></span>${b.name}<small>${b.type === 'exoplanet' ? b.kind : 'star'}</small>`;
+      it.onclick = () => { select(b, true); if (innerWidth < 700) $('#sidebar').classList.remove('open'); };
+      after.after(it); after = it;
+    }
+  }
+  const sysItems = galaxy.systems.filter(s => q ? (s.name.toLowerCase().includes(q) || (s.sol && 'sun solar'.includes(q)) || s.planets.some(p => p.name.toLowerCase().includes(q))) : s.curated);
+  if (sysItems.length) {
+    const h = document.createElement('div'); h.className = 'group'; h.textContent = q ? 'Star systems' : `Star systems (${galaxy.systems.length} — search for more)`; listEl.appendChild(h);
+    for (const s of sysItems.slice(0, 60)) {
+      const it = document.createElement('button'); it.className = 'item';
+      const ly = s.dist_pc * LY_PC;
+      it.innerHTML = `<span class="dot" style="background:#${s.sol ? 'ffcc66' : '6fe3ff'}"></span>${s.name}<small>${s.sol ? 'home' : (ly < 100 ? ly.toFixed(1) : Math.round(ly)) + ' ly'}</small>`;
+      it.onclick = () => { startSystemFlight(s); if (innerWidth < 700) $('#sidebar').classList.remove('open'); };
+      listEl.appendChild(it);
+    }
+  }
+  const satItems = !galaxy.current.sol ? [] : q ? sats.search(q) : sats.featured;
   if (satItems.length) {
     const h = document.createElement('div'); h.className = 'group'; h.textContent = 'Satellites'; listEl.appendChild(h);
     for (const s of satItems) {
@@ -466,18 +549,22 @@ $('#menu').onclick = () => $('#sidebar').classList.toggle('open');
 function bindToggle(id, key, fn) { const el = $(id); el.checked = state[key]; el.onchange = () => { state[key] = el.checked; fn && fn(); applyVisibility(); }; }
 bindToggle('#t-orbits', 'showOrbits');
 state.showSats = true; state.showTrail = true;
-bindToggle('#t-sats', 'showSats', () => { sats.visible = state.showSats; });
+bindToggle('#t-sats', 'showSats');
 bindToggle('#t-trail', 'showTrail', () => { sats.showTrail = state.showTrail; }); bindToggle('#t-labels', 'showLabels'); bindToggle('#t-small', 'showSmall'); bindToggle('#t-moons', 'showMoons');
 const scaleSel = $('#t-scale');
-scaleSel.onchange = () => { state.scale = scaleSel.value; applyScale(); updatePositions(jdFromMs(state.simMs)); sats.markAllFresh(); if (selected) select(selected, true); };
+scaleSel.onchange = () => { state.scale = scaleSel.value; applyScale(); galaxy.applyScaleExo(); updatePositions(jdFromMs(state.simMs)); sats.markAllFresh(); if (selected) select(selected, true); };
 function applyVisibility() {
+  const inSol = !!galaxy.current.sol;
+  sats.visible = state.showSats && inSol;
   for (const b of bodies) {
     const isSmall = b.type === 'asteroid' || b.type === 'kbo';
     const vis = (!isSmall || state.showSmall) && (b.type !== 'moon' || state.showMoons);
     b.group.visible = vis || b.type === 'planet' || b.type === 'star' || b.type === 'dwarf';
     if (b.type === 'moon' || isSmall) b.group.visible = vis;
-    if (b.orbitLine) b.orbitLine.visible = vis && state.showOrbits;
+    if (b.orbitLine) b.orbitLine.visible = vis && state.showOrbits && inSol;
+    if (!inSol) b.group.visible = false;
   }
+  for (const b of galaxy.exoBodies) if (b.orbitLine) b.orbitLine.visible = state.showOrbits;
 }
 
 // time controls
@@ -534,8 +621,10 @@ function updateLabels() {
       tv.copy(b.group.position).project(camera);
       if (tv.z < 1 && Math.hypot((tv.x - occluder.sx) * camera.aspect, tv.y - occluder.sy) < occluder.sr) show = false;
     }
+    if (galaxy.galactic > 0.5) show = false;
     b.label.visible = show;
   }
+  for (const b of galaxy.exoBodies) b.label.visible = state.showLabels && galaxy.galactic < 0.5;
   // fade orbit lines when zoomed in close
   const f = Math.min(1, Math.max(0.12, camDist / 3));
   for (const b of bodies) if (b.orbitLine) b.orbitLine.material.opacity = (b.type === 'planet' ? 0.55 : 0.35) * (b.type === 'moon' ? 1 : f);
@@ -543,7 +632,7 @@ function updateLabels() {
 
 // ---------- loop ----------
 const clock = new THREE.Timer();
-let lastOrbitRebuild = state.simMs, infoTick = 0, lastDateStr = '';
+let lastOrbitRebuild = state.simMs, infoTick = 0, lastDateStr = '', navTick = 0;
 function fmtLocal(ms) { const d = new Date(ms); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
 function frame() {
   clock.update(); const dt = Math.min(clock.getDelta(), 0.1);
@@ -553,7 +642,11 @@ function frame() {
   updatePositions(jd);
   if (Math.abs(state.simMs - lastOrbitRebuild) > 86400000 * 30) { buildHelioOrbits(jd); buildMoonOrbits(jd); applyVisibility(); lastOrbitRebuild = state.simMs; }
   sats.update(state.simMs, camera, dt, selected);
-  updateCamera(dt);
+  galaxy.update(jd, dt);
+  if (!galaxy.updateFlight(dt)) updateCamera(dt);
+  const cd = camera.position.distanceTo(controls.target);
+  controls.zoomSpeed = 1.4 + 0.45 * Math.min(6, Math.max(0, Math.log10(cd / 2000)));
+  navTick += dt; if (navTick > 0.3) { navTick = 0; updateNavButtons(); }
   controls.update();
   updateLabels();
   if ((infoTick += dt) > 0.25) { infoTick = 0; if (selected) updateInfo(); }
@@ -565,6 +658,15 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
+const homeBtn = $('#btn-home'), galBtn = $('#btn-galaxy'), sysName = $('#sys-name');
+function updateNavButtons() {
+  const away = !galaxy.current.sol || galaxy.galactic > 0.5;
+  homeBtn.style.display = away ? '' : 'none';
+  sysName.textContent = galaxy.galactic > 0.5 ? 'Interstellar view' : galaxy.current.sol ? 'Solar System' : `${galaxy.current.name} · ${(galaxy.current.dist_pc * LY_PC).toFixed(galaxy.current.dist_pc * LY_PC < 100 ? 1 : 0)} ly`;
+  galBtn.style.display = galaxy.galactic > 0.5 ? 'none' : '';
+}
+homeBtn.onclick = () => startSystemFlight(galaxy.byId.sol);
+galBtn.onclick = () => startSystemFlight(galaxy.current, { galactic: true });
 const jd0 = jdFromMs(state.simMs);
 buildHelioOrbits(jd0);
 applyScale();
@@ -572,5 +674,16 @@ updatePositions(jd0);
 applyVisibility();
 const hash = decodeURIComponent(location.hash.slice(1));
 if (byName[hash]) setTimeout(() => select(byName[hash], true), 50);
-window.__solar = { state, bodies, byName, select, camera, controls };
+if (hash.startsWith('sys-')) {
+  const [sid, pname] = hash.slice(4).split('/');
+  const s = galaxy.byId[sid];
+  if (s) {
+    galaxy.setCurrent(s); galaxy.onArrive(s);
+    camera.position.set(0, s.viewDist * 0.45, s.viewDist * 0.9); controls.target.set(0, 0, 0);
+    const pb = pname && galaxy.exoBodies.find(b => b.name === decodeURIComponent(pname));
+    setTimeout(() => select(pb || galaxy.exoBodies[0], !!pb), 50);
+  }
+}
+updateNavButtons();
+window.__solar = { state, bodies, byName, select, camera, controls, galaxy, startSystemFlight };
 frame();

@@ -11,6 +11,13 @@ Live: https://solar.eliasw.app
 - `functions/api/gp.js` is a Cloudflare Pages Function that proxies CelesTrak with a 2-hour edge cache (the client falls back to CelesTrak directly, which allows CORS).
 - Enlarged-bodies or true-scale mode, orbit lines, labels, search (`/`), click/tap to fly to and follow a body, time rate slider, date picker.
 
+## Other star systems
+- 149 systems: every NASA Exoplanet Archive host within ~50 ly plus a curated list (TRAPPIST-1, Kepler-452/186/22/442, HD 209458, 51 Peg, 55 Cnc, HR 8799, TOI-700, LHS 1140, K2-18, …) and a hand-made Alpha Centauri A/B binary. Baked into `src/data/exoplanets.json` by `npm run exoplanets` (TAP query on `pscomppars`).
+- ~9,700 background stars (naked-eye stars + everything within 16 pc) from the HYG v4.1 catalog (CC BY-SA 4.0) in `public/data/stars.json` (`npm run stars`). Stars are drawn at their real 3D positions with brightness computed from the camera position, so the sky changes as you travel.
+- Each system gets its own local origin: the scene origin is moved to the destination star halfway through an interstellar flight (while the camera is light-years away), so planets stay precise; a logarithmic depth buffer covers the 10⁻⁷…10¹¹ unit range.
+- Planet appearance is an artist's estimate from radius, mass and irradiation temperature (rocky / lava / water world / sub-Neptune / ice giant / gas giant / hot Jupiter). Orbital phase and orbit orientation are not known in general and are estimated deterministically. Missing radii/masses/periods are estimated from mass–radius and Kepler relations (marked "est.").
+- Habitable zone: approximate conservative limits (Kopparapu et al. 2013), drawn as a green ring.
+
 ## Develop
 ```
 npm install
