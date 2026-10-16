@@ -10,6 +10,7 @@ import { jdFromMs, helioPos, orbitPoints, periodDays, moonGeo, toThree, poleEcli
 import { Satellites, SAT_GROUPS } from './satellites.js';
 import { Galaxy, LY_PC } from './galaxy.js';
 import { classifyStar, makeStarMaterial, starTime, tickFlares } from './starshader.js';
+import { applyProcedural, PROC } from './smallgen.js';
 import './style.css';
 
 const AU = 50;                 // scene units per AU
@@ -418,6 +419,8 @@ function updateInfo() {
     rows.push([`From ${b.parent}`, fmtKm(b.localKm.length())]);
     rows.push(['Orbital period', fmtPeriod(b.name === 'Moon' ? 27.3217 : b.period) + (b.period < 0 ? ' (retrograde)' : '')]);
   }
+  if (PROC[b.name]) rows.push(['Surface map', `Procedural estimate — ${PROC[b.name].note}`]);
+  else if (b.tex && b.type !== 'star') rows.push(['Surface map', 'Solar System Scope (NASA-derived, CC BY 4.0)']);
   if (b.rot && b.type !== 'moon') rows.push(['Day length', fmtPeriod(Math.abs(b.rot) / 24) + (b.rot < 0 ? ' (retrograde)' : '')]);
   info.querySelector('.name').textContent = b.name;
   info.querySelector('.sub').textContent = b.fullname || '';
@@ -680,6 +683,7 @@ function updateNavButtons() {
 }
 homeBtn.onclick = () => startSystemFlight(galaxy.byId.sol);
 galBtn.onclick = () => startSystemFlight(galaxy.current, { galactic: true });
+applyProcedural(bodies, ['Pluto', 'Ceres', 'Charon', 'Io', 'Europa', 'Ganymede', 'Callisto', 'Titan', 'Vesta', 'Eris', 'Makemake', 'Haumea', 'Phobos', 'Deimos']);
 const jd0 = jdFromMs(state.simMs);
 buildHelioOrbits(jd0);
 applyScale();

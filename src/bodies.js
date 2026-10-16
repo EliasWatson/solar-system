@@ -27,10 +27,10 @@ export const PHYS = {
   Pluto:   { r: 1188.3, pole: [132.99, -6.16], rot: -153.29, tex: '2k_moon.jpg', tint: 0xd9b48f },
   Ceres:   { r: 469.7, pole: [291.4, 66.8], rot: 9.07, tex: '2k_ceres_fictional.jpg' },
   Eris:    { r: 1163, rot: 378.9, tex: '2k_eris_fictional.jpg' },
-  Haumea:  { r: 816, rot: 3.92, tex: '2k_haumea_fictional.jpg', squash: [1.0, 0.51, 0.78] },
+  Haumea:  { r: 816, rot: 3.92, tex: '2k_haumea_fictional.jpg' },
   Makemake:{ r: 715, rot: 22.8, tex: '2k_makemake_fictional.jpg' },
   Sedna:   { r: 500, rot: 10.3, tex: '2k_moon.jpg', tint: 0xc06040 },
-  Arrokoth:{ r: 18, rot: 15.9, tex: '2k_moon.jpg', tint: 0xb06a50, squash: [1.0, 0.45, 0.6] },
+  Arrokoth:{ r: 18, rot: 15.9, tex: '2k_moon.jpg', tint: 0xb06a50 },
 };
 
 const TYPE_LABEL = { star: 'Star', planet: 'Planet', dwarf: 'Dwarf planet', asteroid: 'Asteroid', kbo: 'Kuiper belt object', moon: 'Moon' };
