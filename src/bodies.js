@@ -13,7 +13,9 @@ export const PLANET_ELEMENTS = {
   Neptune: [[30.06992276, 0.00859048, 1.77004347, -55.12002969, 44.96476227, 131.78422574], [0.00026291, 0.00005105, 0.00035372, 218.45945325, -0.32241464, -0.00508664]],
 };
 
-// radius km, pole RA/Dec (IAU, deg), rotation period hours (negative = retrograde), texture
+// radius km, pole RA/Dec (IAU, deg), rotation period hours (negative = retrograde about the given pole), texture
+// Pluto: IAU uses the right-hand-rule (positive) pole, so its spin is prograde about that pole (W increases);
+// it is still retrograde relative to its orbit (obliquity ~120°) → retro flag for display only.
 export const PHYS = {
   Sun:     { r: 695700, pole: [286.13, 63.87], rot: 609.12, tex: '2k_sun.jpg' },
   Mercury: { r: 2439.7, pole: [281.01, 61.41], rot: 1407.6, tex: '2k_mercury.jpg' },
@@ -24,7 +26,7 @@ export const PHYS = {
   Saturn:  { r: 58232, pole: [40.59, 83.54], rot: 10.656, tex: '2k_saturn.jpg', ring: [74500, 140220] },
   Uranus:  { r: 25362, pole: [257.31, -15.18], rot: -17.24, tex: '2k_uranus.jpg' },
   Neptune: { r: 24622, pole: [299.36, 43.46], rot: 16.11, tex: '2k_neptune.jpg' },
-  Pluto:   { r: 1188.3, pole: [132.99, -6.16], rot: -153.29, tex: '2k_moon.jpg', tint: 0xd9b48f },
+  Pluto:   { r: 1188.3, pole: [132.99, -6.16], rot: 153.29, retro: true, lockTo: 'Charon', tex: '2k_moon.jpg', tint: 0xd9b48f },
   Ceres:   { r: 469.7, pole: [291.4, 66.8], rot: 9.07, tex: '2k_ceres_fictional.jpg' },
   Eris:    { r: 1163, rot: 378.9, tex: '2k_eris_fictional.jpg' },
   Haumea:  { r: 816, rot: 3.92, tex: '2k_haumea_fictional.jpg' },

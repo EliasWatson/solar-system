@@ -254,7 +254,7 @@ const galaxy = new Galaxy({
 function startSystemFlight(s, opts) { selected = null; flight = null; info.classList.add('hidden'); galaxy.flyToSystem(s, opts); }
 
 // ---------- update positions ----------
-const tmp = [0, 0, 0], tv = new THREE.Vector3(), tv2 = new THREE.Vector3();
+const tmp = [0, 0, 0], tv = new THREE.Vector3(), tv2 = new THREE.Vector3(), qInv = new THREE.Quaternion();
 function updatePositions(jd) {
   for (const b of bodies) {
     if (b.kind) {
@@ -270,12 +270,19 @@ function updatePositions(jd) {
     b.localKm = tv.clone();
     moonScale(b, tv, tv2);
     b.group.position.copy(p.group.position).add(tv2);
-    // tidally locked: face the parent (texture lon 0 = local +X)
-    b.spin.rotation.y = Math.atan2(tv.z, -tv.x);
+    // tidally locked: sub-parent point = lon 0 = texture centre u=0.5 = local +X. Regular moons spin about the
+    // parent's pole (they orbit in its equatorial plane), so work in the parent's equatorial frame.
+    if (b.name !== 'Moon') b.tilt.quaternion.copy(p.tilt.quaternion);
+    const vl = tv2.copy(tv).applyQuaternion(qInv.copy(b.tilt.quaternion).invert());
+    b.spin.rotation.y = Math.atan2(vl.z, -vl.x);
   }
   for (const b of bodies) {
     if (b.type === 'moon') continue;
-    if (b.name === 'Earth') b.spin.rotation.y = gmst(jd);
+    if (b.lockTo && byName[b.lockTo]?.localKm) {
+      // mutual tidal lock (Pluto–Charon): Pluto's prime meridian (lon 0) is the sub-Charon point
+      const vl = tv.copy(byName[b.lockTo].localKm).negate().applyQuaternion(qInv.copy(b.tilt.quaternion).invert());
+      b.spin.rotation.y = Math.atan2(vl.z, -vl.x);
+    } else if (b.name === 'Earth') b.spin.rotation.y = gmst(jd);
     else b.spin.rotation.y = ((jd * 24) / b.rot) * 2 * Math.PI % (2 * Math.PI);
   }
 }
@@ -421,7 +428,7 @@ function updateInfo() {
   }
   if (PROC[b.name]) rows.push(['Surface map', `Procedural estimate — ${PROC[b.name].note}`]);
   else if (b.tex && b.type !== 'star') rows.push(['Surface map', 'Solar System Scope (NASA-derived, CC BY 4.0)']);
-  if (b.rot && b.type !== 'moon') rows.push(['Day length', fmtPeriod(Math.abs(b.rot) / 24) + (b.rot < 0 ? ' (retrograde)' : '')]);
+  if (b.rot && b.type !== 'moon') rows.push(['Day length', fmtPeriod(Math.abs(b.rot) / 24) + (b.rot < 0 || b.retro ? ' (retrograde)' : '')]);
   info.querySelector('.name').textContent = b.name;
   info.querySelector('.sub').textContent = b.fullname || '';
   info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');

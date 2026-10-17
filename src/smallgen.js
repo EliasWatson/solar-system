@@ -16,8 +16,9 @@ export function fbm(p, f, s, oct = 5) { let a = 0, amp = 0.5, n = 0; for (let i 
 const ridge = (p, f, s, oct = 4) => 1 - Math.abs(fbm(p, f, s, oct) * 2 - 1);
 function rng(seed) { let a = Math.floor(seed * 4294967296) >>> 0; return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 const D = Math.PI / 180;
-// lat/lon (deg) → unit vector in SphereGeometry's convention (u = lon/360)
-function dirLL(lat, lon) { const th = (90 - lat) * D, ph = lon * D; return [-Math.cos(ph) * Math.sin(th), Math.cos(th), Math.sin(ph) * Math.sin(th)]; }
+// lat/lon (deg, east-positive) → unit vector in SphereGeometry's convention. Like the real equirectangular maps,
+// lon 0 sits at the texture centre (u = 0.5, local +X) and u = (lon + 180) / 360; east = direction of spin.
+function dirLL(lat, lon) { const th = (90 - lat) * D, ph = lon * D; return [Math.cos(ph) * Math.sin(th), Math.cos(th), -Math.sin(ph) * Math.sin(th)]; }
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const ang = (p, q) => Math.acos(Math.max(-1, Math.min(1, dot(p, q))));
 const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -37,15 +38,16 @@ function makeCraters(seed, n, rmin, rmax, opts = {}) {
   return out;
 }
 function craterField(p, list) {
-  let h = 0, ray = 0, fresh = 0;
+  let h = 0, ray = 0, fresh = 0, rim = 0;
   for (const k of list) {
     const cd = dot(p, k.c); if (cd < k.cosR) continue;
     const d = Math.acos(Math.min(1, cd)) / k.R;
     if (d < 1) h += (d * d - 1) * k.depth * k.R; // bowl
-    h += Math.exp(-1 * ((d - 1) / 0.18) ** 2) * 0.35 * k.R * k.depth; // rim
+    const rr = Math.exp(-1 * ((d - 1) / 0.18) ** 2); rim = Math.max(rim, rr * Math.min(1, k.R * 25));
+    h += rr * 0.35 * k.R * k.depth; // rim
     if (k.fresh) { ray = Math.max(ray, d < 1.6 ? (1 - d / 1.6) : 0); if (d < 1) fresh = 1; }
   }
-  return { h, ray, fresh };
+  return { h, ray, fresh, rim };
 }
 
 // ---------- per-body recipes ----------
@@ -53,39 +55,110 @@ function craterField(p, list) {
 const R = {};
 const rocky = (base, alt, { craters = 60, rmax = 0.25, f = 3, varAmt = 0.25, seedName } = {}) => ({ base, alt, craters, rmax, f, varAmt });
 
+// 3D Worley (cellular) noise → [F1, F2] distances, used for Sputnik Planitia's convection cells
+function worley(p, f, s) {
+  const x = p[0] * f, y = p[1] * f, z = p[2] * f, xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  let f1 = 9, f2 = 9;
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (let k = -1; k <= 1; k++) {
+    const cx = xi + i, cy = yi + j, cz = zi + k;
+    const dx = cx + hash3(cx, cy, cz, s) - x, dy = cy + hash3(cx, cy, cz, s + 1) - y, dz = cz + hash3(cx, cy, cz, s + 2) - z;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+  }
+  return [Math.sqrt(f1), Math.sqrt(f2)];
+}
+const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+// domain-warped point on the sphere, so region outlines get ragged, non-geometric edges
+const warp = (p, amt, f, s) => norm([p[0] + amt * (fbm(p, f, s, 4) - 0.5), p[1] + amt * (fbm(p, f, s + 11, 4) - 0.5), p[2] + amt * (fbm(p, f, s + 23, 4) - 0.5)]);
+// union of soft circular blobs [lat, lon, radius°] measured on a warped point → irregular region mask 0..1
+function blobs(q, list, edge = 0.25) {
+  let m = 0;
+  for (const [la, lo, r] of list) { const d = ang(q, dirLL(la, lo)) / (r * D); m = Math.max(m, sm(1 + edge, 1 - edge, d)); }
+  return m;
+}
+// precomputed blob centres (dirLL is cheap, but this keeps the per-pixel loop lean)
+const PLUTO = {
+  // Cthulhu Macula / Belton Regio: ~3000×1000 km, centre ~8°S 96°E, spanning ~15–165°E. Built from offset lobes
+  // (wider in the middle, ragged northern bays, tapering east toward the heart's western edge) — not a band.
+  cthulhu: [[-14, 22, 9], [-10, 38, 13], [-4, 56, 15], [-9, 74, 19], [2, 88, 12], [-12, 98, 21], [-3, 116, 17],
+    [-16, 124, 13], [-8, 140, 12], [-2, 154, 8], [-12, 160, 6], [10, 66, 8], [9, 104, 7], [-24, 86, 9]],
+  // the "brass knuckles" east of the heart (Beyer & Showalter 2021 nomenclature)
+  krun: [[-13, 205, 8], [-10, 214, 6], [-16, 198, 5]],          // Krun Macula / Safronov Regio, 12.7°S 210°E
+  ala: [[-12.6, 239, 5], [-10, 233, 3]],
+  balrog: [[-7.5, 272, 10], [-9, 286, 11], [-4, 296, 6]],         // Balrog Macula / Harrington Regio, 7.5°S 281.5°E
+  vucub: [[-8.4, 319, 7], [-6, 326, 4]], hun: [[-8, 344, 7]], meng: [[-8, 0, 5]],
+  // Tombaugh Regio: Sputnik Planitia (western lobe, 19.5°N 178.7°E, ~1050×800 km teardrop) + mottled eastern lobe
+  sputnik: [[30, 177, 16], [20, 180, 18], [8, 176, 14], [-2, 174, 9], [38, 183, 11], [24, 190, 10]],
+  eastLobe: [[18, 205, 14], [6, 214, 12], [30, 220, 10], [12, 230, 9]],
+  tc: dirLL(15, 195),
+};
 R.Pluto = {
-  note: "New Horizons-inspired: bright N₂-ice Sputnik Planitia ('heart'), dark red Cthulhu Macula, grey-yellow north pole",
-  res: 512, craters: 70, rmax: 0.12, albedo: 1,
+  note: "New Horizons-based layout: bright N₂-ice Sputnik Planitia (the 'heart', 19.5°N 179°E) with convection cells, Cthulhu Macula and the dark equatorial maculae (Krun, Balrog…), pale yellowish Lowell Regio in the north; positions follow the IAU/New Horizons map, fine detail is procedural",
+  res: 1024, craters: 110, rmax: 0.1, albedo: 1, rimLight: 0xb89a80,
   shape: { axes: [1, 1, 1], amp: 0.004 },
   surface(p, lat, lon, c) {
-    const n = fbm(p, 4, c.s), n2 = fbm(p, 14, c.s + 3, 3);
-    let col = mix(hex(0xc8a27a), hex(0xe2c9a6), n);                    // tholin-tinted ices
-    let h = (n - 0.5) * 0.04;
-    // Cthulhu Macula: dark reddish band west of the heart
-    const cth = sm(0.55, 0.15, Math.abs(lat + 5) / 30) * sm(0, 25, lon - 15) * sm(0, 25, 160 - lon);
-    col = mix(col, mul(hex(0x6a2e1c), 0.85 + 0.3 * n2), cth * 0.95);
-    // north polar region: grey-yellow methane frost
-    col = mix(col, hex(0xd9cfa8), sm(45, 70, lat) * 0.8);
-    // Sputnik Planitia (left lobe of Tombaugh Regio) and the paler eastern lobe
-    const sp = ang(p, dirLL(25, 177)), lobeE = ang(p, dirLL(5, 215));
-    const heart = sm(0.42, 0.33, sp + 0.06 * Math.sin(lon * D * 6));
-    const east = sm(0.5, 0.36, lobeE) * 0.75;
-    const cells = ridge(p, 22, c.s + 9, 2);
-    col = mix(col, mix(hex(0xf6efe2), hex(0xe9dcc4), cells * 0.6), Math.max(heart, east));
-    h = h * (1 - heart) - heart * 0.03 + heart * cells * 0.004;
-    return [col, h, heart];
+    const n = fbm(p, 4, c.s), n2 = fbm(p, 14, c.s + 3, 3), n3 = fbm(p, 30, c.s + 4, 2);
+    // base: orange-tan tholin-stained mid-latitudes, paler toward the north, duskier far south (unimaged)
+    let col = mix(hex(0xc4895c), hex(0xdcb48a), n);
+    col = mix(col, hex(0xe6cfaa), sm(15, 45, lat + 12 * (n2 - 0.5)) * 0.55);
+    col = mix(col, hex(0x9c6a4a), sm(-35, -70, lat + 10 * (n - 0.5)) * 0.5);
+    let h = (n - 0.5) * 0.04 + (n3 - 0.5) * 0.008;
+    // Lowell Regio: pale yellowish/grey methane-rich north polar region, ragged edge
+    if (lat > 30) {
+      const lq = warp(p, 1.1, 2.2, c.s + 40), ln = fbm(p, 8, c.s + 41, 3);
+      const lowell = sm(50, 64, Math.asin(lq[1]) / D + 16 * (ln - 0.5)) * (0.75 + 0.25 * ln);
+      const core = sm(74, 86, Math.asin(warp(p, 0.6, 3, c.s + 42)[1]) / D + 14 * (fbm(p, 9, c.s + 43, 3) - 0.5));   // bluish-grey methane core at the pole
+      col = mix(col, mix(hex(0xd8cb98), hex(0xc4c2b2), core), lowell * 0.85);
+    }
+    let dark = 0, sp = 0;
+    if (lat > -50 && lat < 40) {
+    // dark equatorial maculae on a warped domain (ragged outlines), patchy interiors
+    const q = warp(p, 0.42, 2.6, c.s + 60), q2 = warp(q, 0.12, 9, c.s + 70);
+    const cth = blobs(q2, PLUTO.cthulhu, 0.3);
+    const other = Math.max(blobs(q2, PLUTO.krun, 0.35), blobs(q2, PLUTO.ala, 0.4), blobs(q2, PLUTO.balrog, 0.3),
+      blobs(q2, PLUTO.vucub, 0.4), blobs(q2, PLUTO.hun, 0.4), blobs(q2, PLUTO.meng, 0.45));
+    const patch = sm(0.28, 0.62, fbm(p, 7, c.s + 80, 4));          // light inliers / bays break the dark areas up
+    dark = Math.min(1, cth * (0.55 + 0.45 * patch) + other * (0.5 + 0.4 * patch));
+    col = mix(col, mul(mix(hex(0x3e1d14), hex(0x6a3220), n2), 0.9 + 0.25 * n3), dark * 0.93);
+    h += dark * 0.006 * (n2 - 0.5);
+    }
+    // Tombaugh Regio
+    if (dot(p, PLUTO.tc) > 0.5) {
+    const hq = warp(p, 0.16, 5, c.s + 90);
+    sp = blobs(hq, PLUTO.sputnik, 0.18);
+    const east = blobs(warp(p, 0.3, 4, c.s + 95), PLUTO.eastLobe, 0.35) * (0.55 + 0.35 * sm(0.35, 0.65, fbm(p, 10, c.s + 96, 3)));
+    const [f1, f2] = worley(p, 34, c.s + 120);                      // ~20–40 km-scale cells (exaggerated)
+    const trough = sm(0.12, 0.0, f2 - f1);
+    const ice = mix(mix(hex(0xf7f1e4), hex(0xeee3cc), n2 * 0.7), hex(0xd8c6a6), trough * 0.55);
+    col = mix(col, mix(hex(0xefe4cf), hex(0xf5ede0), n3), east * (1 - sp));
+    col = mix(col, ice, sp);
+    h = h * (1 - sp) - sp * 0.03 + sp * (1 - trough) * 0.004 + east * 0.004;
+    }
+    return [col, h, sp, dark];
   },
 };
 R.Charon = {
-  note: 'New Horizons-inspired: grey water-ice surface with reddish Mordor Macula north pole and a canyon belt',
+  note: 'New Horizons-inspired: grey water-ice surface, diffuse red-brown Mordor Macula (tholins) capping the north pole, Serenity/Mandjet Chasma belt and smoother Vulcan Planitia to the south',
   res: 512, craters: 80, rmax: 0.15, shape: { axes: [1, 1, 1], amp: 0.006 },
   surface(p, lat, lon, c) {
-    const n = fbm(p, 4, c.s);
+    const n = fbm(p, 4, c.s), n2 = fbm(p, 12, c.s + 1, 3);
     let col = mix(hex(0x8f8c88), hex(0xb9b5ae), n);
-    col = mix(col, mul(hex(0x7b3d2b), 0.9 + 0.2 * n), sm(55, 78, lat + 8 * (n - 0.5)));
-    const canyon = sm(0.06, 0.0, Math.abs(lat - 5 - 8 * Math.sin(lon * D * 2))) * (fbm(p, 9, c.s + 2) > 0.45 ? 1 : 0.3);
-    col = mix(col, hex(0x5f5a55), canyon * 0.6);
-    return [col, (n - 0.5) * 0.05 - canyon * 0.03];
+    // Mordor Macula: diffuse, off-centre polar stain with a ragged, gradual edge
+    const q = warp(p, 0.9, 2.2, c.s + 30);
+    const md = ang(q, dirLL(84, 30)) / D;
+    const mordor = sm(34, 10, md + 16 * (fbm(p, 6, c.s + 31, 3) - 0.5));
+    col = mix(col, mul(mix(hex(0x6e3424), hex(0x8e4a32), n2), 0.95 + 0.15 * n), mordor * (0.65 + 0.3 * sm(30, 10, md)));
+    // chasma belt: branching ridged-noise rifts confined to a wavy ~0–35°N zone (Serenity/Mandjet/Argo)
+    const zq = warp(p, 0.4, 2, c.s + 50);
+    const zone = sm(-8, 6, Math.asin(zq[1]) / D) * sm(38, 22, Math.asin(zq[1]) / D);
+    // canyons only across part of the globe (Serenity, Mandjet, Argo ~0–120°E), patchy in longitude
+    const reach = sm(1.9, 1.1, ang(warp(p, 0.5, 2, c.s + 52), dirLL(12, 50))) * sm(0.3, 0.55, fbm(p, 3, c.s + 53, 3));
+    const rift = Math.pow(ridge(warp(p, 0.25, 2.5, c.s + 55), 3, c.s + 2, 3), 14) * zone * reach;
+    col = mix(col, hex(0x5f5a55), rift * 0.6);
+    // Vulcan Planitia: smoother, slightly brighter plains south of the belt
+    const vul = sm(-5, -20, Math.asin(zq[1]) / D) * sm(-70, -50, lat);
+    col = mix(col, hex(0xb8b4ae), vul * 0.25);
+    return [col, (n - 0.5) * 0.05 * (1 - vul * 0.6) - rift * 0.03, vul * 0.4];
   },
 };
 R.Ceres = {
@@ -111,7 +184,7 @@ R.Vesta = {
     let col = mix(hex(0x7d7266), hex(0xa99a88), n);
     const s = Math.acos(-p[1]);
     const basin = sm(0.95, 0.5, s); col = mix(col, hex(0x8a8070), basin * 0.5);
-    const troughs = Math.pow(Math.abs(Math.sin((lat + 3 * Math.sin(lon * D)) * D * 28)), 8) * sm(30, 5, Math.abs(lat));
+    const sq = Math.acos(-warp(p, 0.08, 3, c.s + 7)[1]); const troughs = Math.pow(Math.abs(Math.sin(sq * 9 + 2 * fbm(p, 2, c.s + 8, 2))), 14) * sm(1.15, 1.45, sq) * sm(1.95, 1.7, sq) * sm(0.35, 0.6, fbm(p, 3, c.s + 9, 3)); // Divalia Fossae: concentric to Rheasilvia, discontinuous
     col = mix(col, hex(0x5e554b), troughs * 0.5);
     col = mix(col, hex(0x4a3f36), sm(0.6, 0.75, fbm(p, 2.5, c.s + 4)) * 0.4); // dark carbonaceous patches
     return [col, (n - 0.5) * 0.05 - troughs * 0.02 + 0.06 * sm(0.25, 0, s) - 0.05 * basin];
@@ -132,7 +205,7 @@ R.Haumea = {
   shape: { axes: [2100, 1074, 1680], amp: 0.004 },
   surface(p, lat, lon, c) {
     const n = fbm(p, 4, c.s); let col = mix(hex(0xd8dde2), hex(0xf6f8fa), n);
-    col = mix(col, hex(0x8a3a2a), sm(0.4, 0.25, ang(p, dirLL(10, 90))) * 0.8);
+    col = mix(col, hex(0x8a3a2a), sm(0.42, 0.22, ang(warp(p, 0.35, 4, c.s + 3), dirLL(10, 90))) * (0.6 + 0.3 * fbm(p, 10, c.s + 4, 3)));
     return [col, (n - 0.5) * 0.02];
   },
 };
@@ -168,7 +241,7 @@ R.Phobos = {
   shape: { axes: [27, 18, 22], amp: 0.06, fn: p => { const s = ang(p, dirLL(1, 50)); return -0.12 * sm(0.75, 0.2, s) + 0.05 * Math.exp(-1 * ((s / 0.75 - 1) / 0.15) ** 2); } },
   surface(p, lat, lon, c) {
     const n = fbm(p, 5, c.s); let col = mix(hex(0x4a4440), hex(0x6a625a), n);
-    const groove = Math.pow(Math.abs(Math.sin((p[1] * 0.8 + p[2] * 0.6) * 40)), 10);
+    const gq = warp(p, 0.15, 3, c.s + 7); const groove = Math.pow(Math.abs(Math.sin((gq[1] * 0.8 + gq[2] * 0.6) * 34)), 12) * sm(0.35, 0.6, fbm(p, 4, c.s + 8, 3)); // crater-chain grooves, broken up
     col = mix(col, hex(0x34302d), groove * 0.5);
     const st = ang(p, dirLL(1, 50)); col = mix(col, hex(0x7a7068), sm(0.6, 0.3, st) * 0.3);
     return [col, (n - 0.5) * 0.06 - groove * 0.02];
@@ -180,7 +253,7 @@ R.Io = {
   surface(p, lat, lon, c) {
     const n = fbm(p, 4, c.s), m = fbm(p, 9, c.s + 2);
     let col = mix(hex(0xd8c25a), hex(0xeee08a), n);
-    col = mix(col, hex(0xb4703a), sm(55, 75, Math.abs(lat)) * 0.6);
+    col = mix(col, hex(0xb4703a), sm(50, 75, Math.abs(Math.asin(warp(p, 0.7, 2.5, c.s + 6)[1]) / D) + 14 * (m - 0.5)) * 0.6);
     col = mix(col, hex(0xf4f2e2), sm(0.6, 0.75, m) * 0.6);
     let v = 0; for (const k of c.volc) { const d = ang(p, k.c) / k.R; if (d < 3) { v = Math.max(v, d < 1 ? 1 : 0); col = mix(col, hex(0xa83c1e), Math.max(0, 1 - d / 3) * 0.5); } }
     col = mix(col, hex(0x1e1612), v);
@@ -205,7 +278,7 @@ R.Ganymede = {
     const n = fbm(p, 2.5, c.s), g = Math.pow(Math.abs(Math.sin(fbm(p, 6, c.s + 3) * 60)), 3);
     const dark = sm(0.52, 0.58, n);
     let col = mix(mix(hex(0xa69c90), hex(0xc9c1b4), g), hex(0x5e554b), dark);
-    col = mix(col, hex(0xe6e4e0), sm(55, 75, Math.abs(lat)) * 0.6);
+    col = mix(col, hex(0xe6e4e0), sm(50, 75, Math.abs(lat) + 14 * (fbm(p, 6, c.s + 5, 3) - 0.5)) * 0.6);
     return [col, (1 - dark) * g * 0.01 - dark * 0.01];
   },
 };
@@ -238,7 +311,7 @@ R.Triton = {
   note: 'Voyager 2-inspired: pinkish nitrogen-frost south polar cap with dark plume streaks, "cantaloupe terrain" to the north', res: 512, craters: 15, rmax: 0.08, shape: { axes: [1, 1, 1], amp: 0.002 },
   surface(p, lat, lon, c) {
     const cant = ridge(p, 18, c.s, 2); let col = mix(hex(0x9a9a88), hex(0xbab4a0), cant);
-    const cap = sm(-5, -25, lat + 6 * (fbm(p, 4, c.s + 1) - 0.5));
+    const cq = warp(p, 0.8, 2.5, c.s + 4); const cap = sm(-2, -18, Math.asin(cq[1]) / D + 18 * (fbm(p, 7, c.s + 1, 3) - 0.5));
     col = mix(col, mix(hex(0xe8cfc2), hex(0xf6e8de), fbm(p, 6, c.s + 2)), cap);
     const streak = cap * sm(0.7, 0.8, fbm([p[0] * 6, p[1] * 1, p[2] * 6], 3, c.s + 3, 3)); col = mix(col, hex(0x5a4a40), streak * 0.7);
     return [col, (1 - cap) * cant * 0.01];
@@ -307,18 +380,19 @@ function buildTextures(spec, name, s) {
   if (spec.init) spec.init(ctx);
   const craters = spec.craters ? makeCraters(s, spec.craters, 0.012, spec.rmax || 0.2, { fresh: spec.fresh, avoid: spec.avoid }) : [];
   const boulders = spec.boulders ? makeCraters(s + 0.5, spec.boulders, 0.006, 0.05) : [];
-  const hs = new Float32Array(W * H);
+  const hs = new Float32Array(W * H), rimLight = spec.rimLight ? hex(spec.rimLight) : null;
   let hmin = Infinity, hmax = -Infinity;
   for (let y = 0; y < H; y++) {
     const th = (y + 0.5) / H * Math.PI, lat = 90 - th * 180 / Math.PI, st = Math.sin(th), ct = Math.cos(th);
     for (let x = 0; x < W; x++) {
-      const u = (x + 0.5) / W, lon = u * 360, ph = u * 2 * Math.PI;
+      const u = (x + 0.5) / W, lon = u * 360 - 180, ph = u * 2 * Math.PI; // lon in [-180, 180)
       const p = [-Math.cos(ph) * st, ct, Math.sin(ph) * st];
-      let [c, h, smooth = 0] = spec.surface(p, lat, lon, ctx);
+      let [c, h, smooth = 0, dark = 0] = spec.surface(p, lat, lon, ctx);
       if (craters.length && smooth < 0.5) {
         const k = craterField(p, craters);
         h += k.h * (1 - smooth);
         c = mul(c, 1 + k.h * 1.2);                                   // shaded floors
+        if (dark && rimLight) c = mix(c, rimLight, Math.min(1, k.rim * 2.5) * dark * 0.7); // bright rims break up dark terrain
         if (k.ray) c = mix(c, mul(c, 1.5), k.ray * 0.35);             // bright ejecta of fresh craters
       }
       for (const b of boulders) {
@@ -345,14 +419,15 @@ export function applyProcedural(bodies, order = []) {
     const b = todo.shift(); if (!b) return;
     const spec = PROC[b.name], s = seedFrom(b.name);
     const hi = (spec.res || 256) >= 512;
+    const t0 = performance.now();
     const geo = buildGeometry(spec, s, hi);
     const { map, bumpMap } = buildTextures(spec, b.name, s);
     b.mesh.geometry = geo; b.mesh.scale.set(1, 1, 1);
     const m = b.mesh.material;
-    m.map = map; m.bumpMap = bumpMap; m.bumpScale = spec.res >= 512 ? 2.5 : 4; m.color.set(0xffffff);
+    m.map = map; m.bumpMap = bumpMap; m.bumpScale = spec.res >= 1024 ? 1.6 : spec.res >= 512 ? 2.5 : 4; m.color.set(0xffffff);
     if (spec.metal) { m.metalness = spec.metal; m.roughness = spec.rough; }
     m.needsUpdate = true;
-    b.procNote = spec.note;
+    b.procNote = spec.note; b.procMs = Math.round(performance.now() - t0);
     (window.requestIdleCallback || (f => setTimeout(f, 16)))(step, { timeout: 200 });
   };
   setTimeout(step, 300);
