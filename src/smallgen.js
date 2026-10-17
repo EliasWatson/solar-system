@@ -248,6 +248,30 @@ R.Triton = {
 export const PROC = R;
 
 // ---- geometry ----
+// SphereGeometry duplicates vertices along the u=0/1 seam and at the poles. computeVertexNormals() treats
+// each copy separately (half a fan at the seam, one sliver triangle at a pole), so after displacement the
+// copies get different normals → a lit/dark line from pole to pole. Weld by position for normal purposes.
+function weldNormals(g) {
+  const P = g.attributes.position, n = P.count, idx = g.index ? g.index.array : null;
+  const grp = new Int32Array(n), keys = new Map(); let ng = 0;
+  for (let i = 0; i < n; i++) {
+    const k = Math.round(P.getX(i) * 1e5) + ',' + Math.round(P.getY(i) * 1e5) + ',' + Math.round(P.getZ(i) * 1e5);
+    let gi = keys.get(k); if (gi === undefined) { gi = ng++; keys.set(k, gi); } grp[i] = gi;
+  }
+  const acc = new Float64Array(ng * 3), tri = idx ? idx.length : n;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let t = 0; t < tri; t += 3) {
+    const i0 = idx ? idx[t] : t, i1 = idx ? idx[t + 1] : t + 1, i2 = idx ? idx[t + 2] : t + 2;
+    if (grp[i0] === grp[i1] || grp[i1] === grp[i2] || grp[i0] === grp[i2]) continue; // degenerate (pole slivers)
+    a.fromBufferAttribute(P, i0); b.fromBufferAttribute(P, i1); c.fromBufferAttribute(P, i2);
+    c.sub(b); b.sub(a); b.cross(c); // area-weighted face normal
+    for (const i of [i0, i1, i2]) { const o = grp[i] * 3; acc[o] += b.x; acc[o + 1] += b.y; acc[o + 2] += b.z; }
+  }
+  const N = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { const o = grp[i] * 3, l = Math.hypot(acc[o], acc[o + 1], acc[o + 2]) || 1; N[i * 3] = acc[o] / l; N[i * 3 + 1] = acc[o + 1] / l; N[i * 3 + 2] = acc[o + 2] / l; }
+  g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  return g;
+}
 function shapeFactor(spec, p, s) {
   const sh = spec.shape || {}; let r = 1 + (sh.amp || 0) * (fbm(p, 2.2, s + 50, 4) - 0.5) * 2;
   if (sh.fn) r += sh.fn(p);
@@ -265,13 +289,12 @@ function buildGeometry(spec, s, hi) {
       const f = shapeFactor(spec, [v.x, v.y, v.z], s + seedOff);
       pos.setXYZ(i, sc * v.x * f * axes[0] / mx + off[0], sc * v.y * f * axes[1] / mx + off[1], sc * v.z * f * axes[2] / mx + off[2]);
     }
-    g.computeVertexNormals();
-    return g;
+    return weldNormals(g);
   };
   if (spec.lobes) {
     const big = Math.max(...spec.lobes.flatMap(l => l.axes));
     const parts = spec.lobes.map((l, i) => make(l.axes, l.off.map(o => o / 1.6), i * 13, Math.max(...l.axes) / big / 1.6));
-    const g = mergeGeometries(parts); g.computeVertexNormals(); return g;
+    return weldNormals(mergeGeometries(parts));
   }
   return make(spec.shape?.axes || [1, 1, 1], [0, 0, 0], 0);
 }
@@ -310,7 +333,7 @@ function buildTextures(spec, name, s) {
   }
   const span = hmax - hmin || 1;
   for (let i = 0; i < W * H; i++) { const v = (hs[i] - hmin) / span * 255; bump[i * 4] = bump[i * 4 + 1] = bump[i * 4 + 2] = v; bump[i * 4 + 3] = 255; }
-  const mk = (data, srgb) => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0); const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+  const mk = (data, srgb) => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0); const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 4; return t; }; // repeat in u so filtering, mipmaps and bump taps wrap across the seam
   return { map: mk(col, true), bumpMap: mk(bump, false) };
 }
 

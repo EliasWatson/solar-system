@@ -75,9 +75,9 @@ export function makePlanetTexture(kind, seed) {
   const s = seed * 100;
   const gasLike = PAL[kind];
   for (let y = 0; y < H; y++) {
-    const lat = (y / H - 0.5) * Math.PI;
+    const lat = ((y + 0.5) / H - 0.5) * Math.PI; // texel centres
     for (let x = 0; x < W; x++) {
-      const lon = (x / W) * 2 * Math.PI;
+      const lon = ((x + 0.5) / W) * 2 * Math.PI;
       const px = Math.cos(lat) * Math.cos(lon), py = Math.sin(lat), pz = Math.cos(lat) * Math.sin(lon);
       let col, e = 0;
       const i = (y * W + x) * 4;
@@ -123,9 +123,9 @@ export function makePlanetTexture(kind, seed) {
     }
   }
   g.putImageData(img, 0, 0); ge.putImageData(eimg, 0, 0);
-  const map = new THREE.CanvasTexture(c); map.colorSpace = THREE.SRGBColorSpace;
+  const map = new THREE.CanvasTexture(c); map.colorSpace = THREE.SRGBColorSpace; map.wrapS = THREE.RepeatWrapping;
   let emap = null;
-  if (emissive) { emap = new THREE.CanvasTexture(em); emap.colorSpace = THREE.SRGBColorSpace; }
+  if (emissive) { emap = new THREE.CanvasTexture(em); emap.colorSpace = THREE.SRGBColorSpace; emap.wrapS = THREE.RepeatWrapping; }
   return { map, emap };
 }
 
