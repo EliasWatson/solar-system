@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
 <title>Solar System — live 3D</title>
 <meta name="description" content="Explore the Sun, planets, dwarf planets, moons and asteroids in 3D, positioned where they are right now." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='30' fill='%23ffb640'/></svg>" />
@@ -32,11 +32,13 @@
   <div class="credits">Textures: <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a> (CC BY 4.0; small-body/moon surfaces are procedural estimates). Orbits: JPL approximate planetary elements &amp; JPL SBDB. Exoplanets: <a href="https://exoplanetarchive.ipac.caltech.edu/" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a> (CC BY-SA 4.0).</div>
 </aside>
 
-<section id="info" class="hidden">
-  <button class="close" aria-label="Close">×</button>
-  <div class="name"></div><div class="sub"></div>
-  <div class="rows"></div>
-  <button class="refocus">Focus</button>
+<section id="info" class="hidden" aria-label="Body details">
+  <div class="ihead"><div class="grab" aria-hidden="true"></div><div class="name"></div><button class="collapse" aria-label="Collapse details" aria-expanded="true">⌄</button><button class="close" aria-label="Close">×</button></div>
+  <div class="ibody">
+    <div class="sub"></div>
+    <div class="rows"></div>
+    <button class="refocus">Focus</button>
+  </div>
 </section>
 
 <footer id="time">

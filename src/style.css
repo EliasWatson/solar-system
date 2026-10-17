@@ -33,6 +33,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 #info .rows div { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: 13px; }
 #info .rows span { color: var(--mut); }
 #info .close { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: var(--mut); font-size: 22px; cursor: pointer; }
+#info .grab, #info .collapse, #info .more { display: none; }
+#info .ihead .name { padding-right: 24px; }
 #info .refocus { margin-top: 10px; width: 100%; padding: 7px; border-radius: 8px; border: 1px solid var(--bd); background: rgba(255,197,107,.12); color: var(--acc); cursor: pointer; }
 #time { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; z-index: 4; max-width: calc(100% - 24px); }
 #time button { background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid var(--bd); border-radius: 8px; padding: 5px 10px; cursor: pointer; }
@@ -79,3 +81,45 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
   #sys-name { display: none; }
   #sidebar { top: 60px; }
 }
+
+/* ---- mobile info panel: capped bottom sheet with fixed header, scrolling body ---- */
+:root { --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px); --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px); }
+#menu { top: calc(12px + var(--sat)); left: calc(12px + var(--sal)); }
+#nav { top: calc(12px + var(--sat)); }
+#time { bottom: calc(12px + var(--sab)); }
+@media (max-width: 700px) {
+  #sidebar { top: calc(60px + var(--sat)); max-height: calc(55% - var(--sat)); }
+  #info {
+    --top-reserve: calc(62px + var(--sat));          /* menu / nav bar */
+    --bottom-reserve: calc(64px + var(--sab));       /* time bar */
+    top: auto; left: calc(8px + var(--sal)); right: calc(8px + var(--sar)); bottom: var(--bottom-reserve);
+    width: auto; padding: 0; display: flex; flex-direction: column; overflow: hidden;
+    max-height: min(58vh, calc(100vh - var(--top-reserve) - var(--bottom-reserve)));
+    max-height: min(58dvh, calc(100dvh - var(--top-reserve) - var(--bottom-reserve)));
+    transition: transform .2s ease; touch-action: pan-y;
+  }
+  #info.hidden { display: none; }
+  #sidebar.open ~ #info { display: none; }          /* never stack the list on top of the sheet */
+  #info .ihead { position: relative; flex: none; display: flex; align-items: center; gap: 6px; padding: 14px 6px 8px 14px; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; border-bottom: 1px solid var(--bd); }
+  #info .grab { display: block; position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: rgba(255,255,255,.25); }
+  #info .ihead .name { flex: 1; min-width: 0; padding: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #info .close, #info .collapse { position: static; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px; margin: -6px 0; background: none; border: 0; color: var(--mut); font-size: 24px; cursor: pointer; border-radius: 10px; }
+  #info .collapse { font-size: 22px; transition: transform .2s; }
+  #info.collapsed .collapse { transform: rotate(180deg); }
+  #info .ibody { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 6px 14px 12px; }
+  #info.collapsed .ibody { display: none; }
+  #info .sub { font-size: 11.5px; margin-bottom: 6px; }
+  #info .sub:empty { display: none; }
+  /* tidy 2-up grid of label-over-value cells; long values span the full width */
+  #info .rows { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; }
+  #info .rows div { display: block; padding: 4px 0; min-width: 0; }
+  #info .rows div span { display: block; font-size: 11px; line-height: 1.25; }
+  #info .rows div b { display: block; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+  #info .rows div.wide { grid-column: 1 / -1; }
+  #info .rows .detail, #info .rows .dash { display: none; }
+  #info.notes-open .rows .detail { display: inline; font-weight: 400; color: #cfd6e4; }
+  #info.notes-open .rows .dash { display: inline; }
+  #info .more { display: inline; margin-left: 6px; padding: 0 6px; border: 1px solid var(--bd); border-radius: 6px; background: rgba(255,255,255,.06); color: var(--acc); font-size: 11px; font-weight: 600; cursor: pointer; vertical-align: 1px; }
+  #info .refocus { margin-top: 8px; padding: 9px; }
+}
+@media (max-width: 360px) { #info .rows { grid-template-columns: 1fr; } }

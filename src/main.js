@@ -401,7 +401,7 @@ function updateInfo() {
     rows.push(['Elements epoch', `${Math.abs(age).toFixed(1)} d ${age >= 0 ? 'old' : 'ahead'}`]);
     info.querySelector('.name').textContent = b.name;
     info.querySelector('.sub').textContent = `${b.objName} · ${b.cospar}`;
-    info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+    renderRows(rows);
     return;
   }
   rows.push(['Type', b.type === 'moon' ? `Moon of ${b.parent}` : TYPE_LABEL[b.type]]);
@@ -426,12 +426,54 @@ function updateInfo() {
     rows.push([`From ${b.parent}`, fmtKm(b.localKm.length())]);
     rows.push(['Orbital period', fmtPeriod(b.name === 'Moon' ? 27.3217 : b.period) + (b.period < 0 ? ' (retrograde)' : '')]);
   }
-  if (PROC[b.name]) rows.push(['Surface map', `Procedural estimate — ${PROC[b.name].note}`]);
+  if (PROC[b.name]) rows.push(['Surface map', 'Procedural estimate', PROC[b.name].note]);
   else if (b.tex && b.type !== 'star') rows.push(['Surface map', 'Solar System Scope (NASA-derived, CC BY 4.0)']);
   if (b.rot && b.type !== 'moon') rows.push(['Day length', fmtPeriod(Math.abs(b.rot) / 24) + (b.rot < 0 || b.retro ? ' (retrograde)' : '')]);
   info.querySelector('.name').textContent = b.name;
   info.querySelector('.sub').textContent = b.fullname || '';
-  info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  renderRows(rows);
+}
+// Info rows: [label, value, optional long detail]. Desktop shows "value — detail" inline as before; on mobile the
+// detail hides behind a "more" toggle. Rows are patched in place (not re-innerHTML'd every tick) so taps on
+// the toggle aren't lost when the panel refreshes 4×/s.
+const esc = t => String(t);
+let notesOpen = false, infoFor = null, viewShift = 0, appliedShift = 0;
+function renderRows(rows) {
+  const el = info.querySelector('.rows');
+  if (infoFor !== selected) { infoFor = selected; notesOpen = false; info.classList.remove('notes-open'); setCollapsed(false); }
+  const html = ([k, v, d]) => d
+    ? `<span>${k}</span><b>${esc(v)}<span class="dash"> — </span><span class="detail">${esc(d)}</span><button class="more" type="button">${notesOpen ? 'less' : 'more'}</button></b>`
+    : `<span>${k}</span><b>${esc(v)}</b>`;
+  const kids = el.children;
+  const same = kids.length === rows.length && rows.every(([k], i) => kids[i].dataset.k === k);
+  if (!same) {
+    el.innerHTML = rows.map(r => `<div data-k="${r[0]}"${r[2] || String(r[1]).length > 26 ? ' class="wide"' : ''}>${html(r)}</div>`).join('');
+    return;
+  }
+  rows.forEach((r, i) => { const h = html(r); if (kids[i]._h !== h) { kids[i].innerHTML = h; kids[i]._h = h; kids[i].classList.toggle('wide', !!r[2] || String(r[1]).length > 26); } });
+}
+info.querySelector('.rows').addEventListener('click', e => {
+  if (!e.target.closest('.more')) return;
+  e.stopPropagation(); notesOpen = !notesOpen; info.classList.toggle('notes-open', notesOpen);
+  info.querySelectorAll('.rows .more').forEach(m => { m.textContent = notesOpen ? 'less' : 'more'; });
+  info.querySelectorAll('.rows > div').forEach(d => { d._h = null; });
+});
+// bottom-sheet behaviour (mobile): tap header to collapse/expand, swipe down to collapse then dismiss
+const isSheet = () => matchMedia('(max-width: 700px)').matches;
+function setCollapsed(c) { info.classList.toggle('collapsed', c); info.querySelector('.collapse').setAttribute('aria-expanded', String(!c)); }
+{
+  const head = info.querySelector('.ihead');
+  let y0 = null, dy = 0, moved = false;
+  head.addEventListener('click', e => { if (!isSheet() || e.target.closest('.close')) return; if (moved) { moved = false; return; } setCollapsed(!info.classList.contains('collapsed')); });
+  head.addEventListener('touchstart', e => { if (!isSheet() || e.target.closest('.close')) return; y0 = e.touches[0].clientY; dy = 0; moved = false; info.style.transition = 'none'; }, { passive: true });
+  head.addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; if (Math.abs(dy) > 8) moved = true; info.style.transform = `translateY(${Math.max(-20, dy)}px)`; e.preventDefault(); }, { passive: false });
+  head.addEventListener('touchend', () => {
+    if (y0 == null) return; y0 = null; info.style.transition = ''; info.style.transform = '';
+    if (!moved) return;
+    if (dy > 110 || (dy > 40 && info.classList.contains('collapsed'))) closeInfo();
+    else if (dy > 40) setCollapsed(true);
+    else if (dy < -30) setCollapsed(false);
+  });
 }
 function exoInfo(b, rows) {
   const s = b.sys, ly = (s.dist_pc * LY_PC);
@@ -474,9 +516,10 @@ function exoInfo(b, rows) {
   }
   info.querySelector('.name').textContent = b.name;
   info.querySelector('.sub').textContent = sub;
-  info.querySelector('.rows').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  renderRows(rows);
 }
-$('#info .close').onclick = () => { selected = null; flight = null; document.querySelectorAll('.label.sel').forEach(e => e.classList.remove('sel')); info.classList.add('hidden'); controls.minDistance = 1e-5; };
+function closeInfo() { selected = null; flight = null; document.querySelectorAll('.label.sel').forEach(e => e.classList.remove('sel')); info.classList.add('hidden'); setCollapsed(false); controls.minDistance = 1e-5; }
+$('#info .close').onclick = e => { e.stopPropagation(); closeInfo(); };
 $('#info .refocus').onclick = () => selected && select(selected, true);
 
 // body list + search
@@ -610,7 +653,7 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  camera.aspect = innerWidth / innerHeight; appliedShift = -1; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
   labelRenderer.setSize(innerWidth, innerHeight);
 });
@@ -676,6 +719,15 @@ function frame() {
   earthSunView.value.set(0, 0, 0).applyMatrix4(camera.matrixWorldInverse);
   starTime.value += dt;
   tickFlares(byName.Sun.mesh.material, dt);
+  // mobile bottom sheet: shift the projection centre up so the focused body isn't hidden behind the panel
+  {
+    const want = selected && isSheet() && !info.classList.contains('hidden') && !info.classList.contains('collapsed') ? Math.round(info.offsetHeight * 0.42) : 0;
+    viewShift += (want - viewShift) * Math.min(1, dt * 8); if (Math.abs(want - viewShift) < 0.5) viewShift = want;
+    if (viewShift !== appliedShift) {
+      appliedShift = viewShift;
+      if (viewShift) camera.setViewOffset(innerWidth, innerHeight, 0, viewShift, innerWidth, innerHeight); else camera.clearViewOffset();
+    }
+  }
   composer.render();
   labelRenderer.render(scene, camera);
   requestAnimationFrame(frame);
